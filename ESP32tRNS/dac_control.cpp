@@ -6,6 +6,7 @@
 int16_t* signal_buffer = NULL;  // МОНО буфер (только правый канал)
 bool dma_prefilled = false;
 char current_preset_name[PRESET_NAME_MAX_LEN] = "No preset loaded";
+float dac_gain = DEFAULT_GAIN;  // Коэффициент усиления (по умолчанию 1.0)
 
 // Константа для левого канала (вычисляется один раз)
 static int16_t LEFT_CHANNEL_CONST = 0;
@@ -14,11 +15,23 @@ static int16_t LEFT_CHANNEL_CONST = 0;
 // Формируется на лету из МОНО signal_buffer + LEFT_CHANNEL_CONST
 static int16_t* stereo_buffer = NULL;
 
-// Заполнить стерео-буфер из МОНО: [L_CONST, R, L_CONST, R, ...]
+// Заполнить стерео-буфер из МОНО: [L_CONST, R*gain, L_CONST, R*gain, ...]
+// С применением gain и насыщением для int16
 static void fillStereoBuffer() {
   for (int i = 0; i < SIGNAL_SAMPLES; i++) {
-    stereo_buffer[i * 2]     = LEFT_CHANNEL_CONST;  // Левый: константа
-    stereo_buffer[i * 2 + 1] = signal_buffer[i];    // Правый: сигнал
+    stereo_buffer[i * 2] = LEFT_CHANNEL_CONST;  // Левый: константа
+    
+    // Правый: сигнал с gain и насыщением
+    float sample_with_gain = signal_buffer[i] * dac_gain;
+    
+    // Насыщение (clamping) для int16: [-32768, 32767]
+    if (sample_with_gain > 32767.0f) {
+      stereo_buffer[i * 2 + 1] = 32767;
+    } else if (sample_with_gain < -32768.0f) {
+      stereo_buffer[i * 2 + 1] = -32768;
+    } else {
+      stereo_buffer[i * 2 + 1] = (int16_t)sample_with_gain;
+    }
   }
 }
 
@@ -167,6 +180,27 @@ void keepDMAFilled() {
   if (result != ESP_OK && result != ESP_ERR_TIMEOUT) {
     usbWarn("i2s_write error in keepDMAFilled");
   }
+}
+
+// === GAIN CONTROL ===
+
+// Установить коэффициент усиления (gain) для правого канала
+void setDACGain(float gain) {
+  if (gain < MIN_GAIN) {
+    gain = MIN_GAIN;  // Ограничение снизу
+  }
+  
+  dac_gain = gain;
+  
+  // Пересобираем стерео-буфер с новым gain
+  fillStereoBuffer();
+  
+  usbLogf("DAC Gain set to %.2f", dac_gain);
+}
+
+// Получить текущий gain
+float getDACGain() {
+  return dac_gain;
 }
 
 

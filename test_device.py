@@ -4,11 +4,13 @@
 Бинарный протокол с magic bytes + CRC16
 
 Обновления протокола:
-- CMD_GET_POT (0x87): получить позицию потенциометра
-- DeviceStatus: добавлено имя пресета (переменная длина)
+- DeviceStatus: добавлено имя пресета (переменная длина) и gain
 - CMD_SET_DAC: МОНО буфер (32KB) + имя пресета
   * Левый канал = константа (-0.5V), формируется на ESP32
   * Правый канал = сигнал (tRNS/tACS/tDCS)
+- Цифровой потенциометр заменён на программный gain (CMD_SET_GAIN / CMD_GET_GAIN)
+  * Применяется к правому каналу с насыщением int16
+  * По умолчанию 1.0, можно любой ≥ 0.0
 """
 
 import serial
@@ -27,13 +29,13 @@ MSG_ACK = 0x04
 MSG_ERROR = 0x05
 
 # Commands (Host → ESP32)
-CMD_SET_POT = 0x81
-CMD_GET_POT = 0x87
 CMD_GET_ADC = 0x82
 CMD_SET_DAC = 0x83
 CMD_SET_PARAMS = 0x84
 CMD_GET_STATUS = 0x85
 CMD_RESET = 0x86
+CMD_SET_GAIN = 0x88
+CMD_GET_GAIN = 0x89
 
 
 def calc_crc16(data):
@@ -119,31 +121,6 @@ class tRNSDevice:
         
         return msg_type, payload
     
-    def set_pot(self, position):
-        """Установить потенциометр (0-99)"""
-        self.send_command(CMD_SET_POT, struct.pack('B', position))
-        msg_type, payload = self.receive_packet()
-        
-        if msg_type == MSG_ACK:
-            print(f"✓ Потенциометр установлен: {position}")
-            return True
-        elif msg_type == MSG_ERROR:
-            print(f"✗ Ошибка: {payload.decode()}")
-            return False
-    
-    def get_pot_position(self):
-        """Получить текущую позицию потенциометра (0-99)"""
-        self.send_command(CMD_GET_POT)
-        msg_type, payload = self.receive_packet()
-        
-        if msg_type == MSG_ACK and len(payload) == 1:
-            position = struct.unpack('B', payload)[0]
-            print(f"✓ Позиция потенциометра: {position}")
-            return position
-        elif msg_type == MSG_ERROR:
-            print(f"✗ Ошибка: {payload.decode()}")
-            return None
-    
     def get_adc_data(self):
         """Получить ADC буфер"""
         print("Запрос ADC данных...")
@@ -161,32 +138,63 @@ class tRNSDevice:
             return None
     
     def get_status(self):
-        """Получить статус устройства (включая имя текущего пресета)"""
+        """Получить статус устройства (включая имя текущего пресета и gain)"""
         self.send_command(CMD_GET_STATUS)
         msg_type, payload = self.receive_packet()
         
         if msg_type == MSG_STATUS:
-            # Парсим статус: [struct 8 bytes] + [preset_name string]
-            if len(payload) < 8:
+            # Парсим статус: [struct 11 bytes] + [preset_name string]
+            if len(payload) < 11:
                 print(f"✗ Неверная длина статуса: {len(payload)}")
                 return None
             
-            # Распаковываем фиксированную часть (8 байт)
-            pot_pos, adc_samples, adc_rate, error_flags = struct.unpack('<BIHB', payload[:8])
+            # Распаковываем фиксированную часть (11 байт)
+            # uint32_t adc_samples, uint16_t adc_rate, float gain, uint8_t error_flags
+            adc_samples, adc_rate, gain, error_flags = struct.unpack('<IHfB', payload[:11])
             
             # Читаем имя пресета (остаток пакета)
             preset_name = ""
-            if len(payload) > 8:
-                preset_name = payload[8:].decode('utf-8', errors='ignore')
+            if len(payload) > 11:
+                preset_name = payload[11:].decode('utf-8', errors='ignore')
             
             status = {
-                'pot_position': pot_pos,
                 'adc_samples': adc_samples,
                 'adc_rate': adc_rate,
+                'gain': gain,
                 'error_flags': error_flags,
                 'preset_name': preset_name
             }
             return status
+        elif msg_type == MSG_ERROR:
+            print(f"✗ Ошибка: {payload.decode()}")
+            return None
+    
+    def set_gain(self, gain):
+        """Установить коэффициент усиления (gain)"""
+        if gain < 0.0:
+            print(f"✗ Неверный gain: {gain} (должен быть ≥ 0.0)")
+            return False
+        
+        payload = struct.pack('<f', gain)
+        self.send_command(CMD_SET_GAIN, payload)
+        msg_type, payload = self.receive_packet()
+        
+        if msg_type == MSG_ACK:
+            print(f"✓ Gain установлен: {gain:.2f}")
+            return True
+        elif msg_type == MSG_ERROR:
+            print(f"✗ Ошибка: {payload.decode()}")
+            return False
+    
+    def get_gain(self):
+        """Получить текущий gain"""
+        self.send_command(CMD_GET_GAIN)
+        msg_type, payload = self.receive_packet()
+        
+        if msg_type == MSG_ACK and len(payload) == 4:
+            gain = struct.unpack('<f', payload)[0]
+            print(f"✓ Текущий gain: {gain:.2f}")
+            return gain
         elif msg_type == MSG_ERROR:
             print(f"✗ Ошибка: {payload.decode()}")
             return None
@@ -256,16 +264,20 @@ def example_basic():
         for key, value in status.items():
             print(f"  {key}: {value}")
         print(f"\nТекущий пресет: '{status['preset_name']}'")
+        print(f"Gain: {status['gain']}")
     
-    # Управление потенциометром
-    print("\n=== Управление потенциометром ===")
-    dev.set_pot(50)
-    time.sleep(0.2)
-    pos = dev.get_pot_position()
+    # Управление gain (коэффициент усиления)
+    print("\n=== Управление gain ===")
+    dev.set_gain(1.5)  # Увеличить амплитуду в 1.5 раза
+    time.sleep(0.1)
+    gain = dev.get_gain()
     
-    dev.set_pot(75)
-    time.sleep(0.2)
-    pos = dev.get_pot_position()
+    dev.set_gain(0.5)  # Уменьшить амплитуду в 2 раза
+    time.sleep(0.1)
+    gain = dev.get_gain()
+    
+    dev.set_gain(1.0)  # Вернуть к исходной
+    time.sleep(0.1)
     
     # Получить ADC данные
     print("\n=== ADC данные ===")

@@ -17,6 +17,9 @@ extern bool dma_prefilled;
 // Имя текущего пресета (например, "tACS 640Hz 1mA demo")
 extern char current_preset_name[PRESET_NAME_MAX_LEN];
 
+// Коэффициент усиления (gain) для правого канала
+extern float dac_gain;
+
 // Инициализация I2S и DMA для DAC
 void initDAC();
 
@@ -36,6 +39,15 @@ void prefillDMABuffers();
 
 // Поддержание DMA буферов заполненными (неблокирующе!)
 void keepDMAFilled();
+
+// === GAIN CONTROL ===
+
+// Установить коэффициент усиления (gain) для правого канала
+// gain >= 0.0 (без верхнего ограничения, защита через насыщение int16)
+void setDACGain(float gain);
+
+// Получить текущий gain
+float getDACGain();
 
 #endif // DAC_CONTROL_H
 

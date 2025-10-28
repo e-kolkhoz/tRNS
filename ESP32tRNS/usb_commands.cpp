@@ -1,5 +1,4 @@
 #include "usb_commands.h"
-#include "digital_pot.h"
 #include "adc_control.h"
 #include "dac_control.h"
 #include <stdarg.h>
@@ -14,30 +13,6 @@ static const unsigned long STATUS_SEND_INTERVAL = 1000; // 1 сек
 // Callback для обработки команд
 static void commandHandler(uint8_t cmd, const uint8_t* payload, uint16_t len) {
   switch (cmd) {
-    case CMD_SET_POT:
-      // Установить потенциометр
-      if (len >= 1) {
-        uint8_t position = payload[0];
-        if (position <= X9C_MAX_STEPS) {
-          setDigitalPotPosition(position);
-          usbProtocol->sendAck();
-        } else {
-          usbProtocol->sendError("POT: Invalid position (0-99)");
-        }
-      } else {
-        usbProtocol->sendError("POT: Missing parameter");
-      }
-      break;
-      
-    case CMD_GET_POT:
-      // Получить текущую позицию потенциометра
-      {
-        uint8_t position = getDigitalPotPosition();
-        usbProtocol->sendBinary(MSG_ACK, &position, 1);
-        usbLogf("POT: Current position = %d", position);
-      }
-      break;
-      
     case CMD_GET_ADC:
       // Отправить ADC буфер
       {
@@ -109,13 +84,34 @@ static void commandHandler(uint8_t cmd, const uint8_t* payload, uint16_t len) {
       usbProtocol->sendError("SET_PARAMS: Not implemented yet");
       break;
       
+    case CMD_SET_GAIN:
+      // Установить gain (коэффициент усиления)
+      if (len >= sizeof(float)) {
+        float gain;
+        memcpy(&gain, payload, sizeof(float));
+        setDACGain(gain);
+        usbProtocol->sendAck();
+      } else {
+        usbProtocol->sendError("GAIN: Missing parameter (float32)");
+      }
+      break;
+      
+    case CMD_GET_GAIN:
+      // Получить текущий gain
+      {
+        float gain = getDACGain();
+        usbProtocol->sendBinary(MSG_ACK, (uint8_t*)&gain, sizeof(float));
+        usbLogf("GAIN: Current gain = %.2f", gain);
+      }
+      break;
+      
     case CMD_GET_STATUS:
       // Отправить статус + имя пресета
       {
         DeviceStatus status;
-        status.pot_position = getDigitalPotPosition();
         status.adc_samples = ADC_RING_SIZE;
         status.adc_rate = ADC_SAMPLE_RATE;
+        status.gain = getDACGain();
         status.error_flags = 0; // TODO: добавить флаги ошибок
         
         usbProtocol->sendStatus(status, current_preset_name);
@@ -160,9 +156,9 @@ void sendPeriodicStatus() {
     lastStatusSendTime = now;
     
     DeviceStatus status;
-    status.pot_position = getDigitalPotPosition();
     status.adc_samples = adc_write_index; // Текущая позиция записи
     status.adc_rate = ADC_SAMPLE_RATE;
+    status.gain = getDACGain();
     status.error_flags = 0;
     
     if (usbProtocol) {

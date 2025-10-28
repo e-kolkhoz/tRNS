@@ -6,7 +6,7 @@
 // Компоненты:
 // - DAC: PCM5102A (I2S, DMA) - генерация tRNS/tACS сигнала
 // - ADC: встроенный ESP32-S2 (DMA) - показометр тока
-// - Потенциометр: X9C103S (цифровой, с EEPROM)
+// - Потенциометр: ручной многооборотный (аналоговый)
 // - Связь: USB OTG с Android
 //
 // Архитектура:
@@ -17,7 +17,6 @@
 #include "config.h"
 #include "dac_control.h"
 #include "adc_control.h"
-#include "digital_pot.h"
 #include "usb_commands.h"
 
 // ============================================================================
@@ -35,9 +34,6 @@ void setup() {
   
   usbLog("=== tRNS/tACS Device Booting ===");
   usbLog("Hardware: LOLIN S2 Mini (ESP32-S2)");
-  
-  // --- Инициализация X9C103S ---
-  initDigitalPot();
   
   // --- Инициализация ADC DMA ---
   // Выделяем память под кольцевой буфер ADC

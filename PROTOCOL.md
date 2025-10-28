@@ -30,31 +30,31 @@ CRC: CRC16-CCITT (polynomial 0x1021)
 
 | Type | Название | Payload | Описание |
 |------|----------|---------|----------|
-| `0x81` | SET_POT | uint8 (0-99) | Установить потенциометр |
-| `0x87` | GET_POT | empty | Получить позицию потенциометра |
 | `0x82` | GET_ADC | empty | Запросить ADC буфер |
 | `0x83` | SET_DAC | int16[] mono + name | Загрузить DAC буфер (МОНО + имя пресета) |
 | `0x84` | SET_PARAMS | TBD | Параметры (freq, amp) |
 | `0x85` | GET_STATUS | empty | Запросить статус |
 | `0x86` | RESET | empty | Сброс устройства |
+| `0x88` | SET_GAIN | float32 | Установить коэффициент усиления (gain ≥ 0.0) |
+| `0x89` | GET_GAIN | empty | Получить текущий gain (response: float32) |
 
 ## Структура STATUS
 
 ```c
 struct DeviceStatus {
-  uint8_t pot_position;   // Позиция потенциометра (0-99)
   uint32_t adc_samples;   // Количество собранных ADC сэмплов
   uint16_t adc_rate;      // Частота ADC (Hz)
+  float gain;             // Коэффициент усиления (gain)
   uint8_t error_flags;    // Флаги ошибок
   // После структуры идёт строка имени пресета (переменной длины)
 } __attribute__((packed));
 
-Размер: 8 байт фиксированный + preset_name (переменная длина)
+Размер: 11 байт фиксированный + preset_name (переменная длина)
 ```
 
 **Формат payload:**
 ```
-[DeviceStatus: 8 bytes] [preset_name: string до конца пакета]
+[DeviceStatus: 11 bytes] [preset_name: string до конца пакета]
 ```
 
 **Пример preset_name:**
@@ -64,45 +64,7 @@ struct DeviceStatus {
 
 ## Примеры пакетов
 
-### 1. Установить потенциометр на 75
-
-**Отправка (Host → ESP32):**
-```
-AA 55          # Magic
-81             # CMD_SET_POT
-01 00          # Length = 1
-4B             # Payload: 75
-XX XX          # CRC16
-```
-
-**Ответ (ESP32 → Host):**
-```
-AA 55          # Magic
-04             # MSG_ACK
-00 00          # Length = 0
-XX XX          # CRC16
-```
-
-### 2. Получить позицию потенциометра
-
-**Отправка (Host → ESP32):**
-```
-AA 55          # Magic
-87             # CMD_GET_POT
-00 00          # Length = 0
-XX XX          # CRC16
-```
-
-**Ответ (ESP32 → Host):**
-```
-AA 55          # Magic
-04             # MSG_ACK
-01 00          # Length = 1
-4B             # Payload: 75 (позиция)
-XX XX          # CRC16
-```
-
-### 3. Запросить ADC буфер
+### 1. Запросить ADC буфер
 
 **Отправка:**
 ```
@@ -121,7 +83,7 @@ AA 55          # Magic
 XX XX          # CRC16
 ```
 
-### 4. Загрузить DAC буфер (пресет)
+### 2. Загрузить DAC буфер (пресет)
 
 **Отправка:**
 ```
@@ -143,6 +105,47 @@ XX XX                      # CRC16
 
 **Важно:** Левый канал = константа (-0.5V), не передаётся!
 
+### 3. Установить gain (коэффициент усиления)
+
+**Отправка (Host → ESP32):**
+```
+AA 55          # Magic
+88             # CMD_SET_GAIN
+04 00          # Length = 4
+XX XX XX XX    # float32 gain (например, 1.5)
+XX XX          # CRC16
+```
+
+**Ответ (ESP32 → Host):**
+```
+AA 55          # Magic
+04             # MSG_ACK
+00 00          # Length = 0
+XX XX          # CRC16
+```
+
+**Пример:** Установить gain = 2.0 (удвоить амплитуду)
+- Payload: `00 00 00 40` (2.0 в float32 little-endian)
+
+### 4. Получить текущий gain
+
+**Отправка (Host → ESP32):**
+```
+AA 55          # Magic
+89             # CMD_GET_GAIN
+00 00          # Length = 0
+XX XX          # CRC16
+```
+
+**Ответ (ESP32 → Host):**
+```
+AA 55          # Magic
+04             # MSG_ACK
+04 00          # Length = 4
+XX XX XX XX    # float32 current gain
+XX XX          # CRC16
+```
+
 ### 5. Текстовое сообщение (лог)
 
 **ESP32 → Host:**
@@ -163,20 +166,20 @@ import numpy as np
 # Подключение
 dev = tRNSDevice('/dev/ttyACM0')
 
-# Установить потенциометр
-dev.set_pot(50)
-
-# Получить позицию потенциометра
-position = dev.get_pot_position()
-print(f"Pot: {position}")
-
 # Получить ADC данные
 adc_data = dev.get_adc_data()
 
-# Получить статус (с именем пресета)
+# Получить статус (с именем пресета и gain)
 status = dev.get_status()
 print(f"Preset: {status['preset_name']}")
-print(f"Pot: {status['pot_position']}")
+print(f"Gain: {status['gain']}")
+
+# Установить gain (коэффициент усиления)
+dev.set_gain(1.5)  # Увеличить амплитуду в 1.5 раза
+
+# Получить текущий gain
+gain = dev.get_gain()
+print(f"Current gain: {gain}")
 
 # Загрузить новый пресет (МОНО буфер + имя)
 buffer = np.sin(2 * np.pi * 640 * np.arange(16000) / 8000)

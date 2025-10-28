@@ -26,11 +26,6 @@
 #define I2S_WCLK    35  // LRCK (Word select / LRC) PCM5102A  
 #define I2S_DOUT    37  // DIN (Data in) PCM5102A
 
-// --- X9C103S цифровой потенциометр 10kΩ ---
-#define X9C_INC     5   // INC  Increment pulse
-#define X9C_UD      7   // U/D  Up/Down direction (HIGH=up, LOW=down)
-#define X9C_CS      9   // CS   Chip Select (LOW=active)
-
 // --- ADC показометр тока (через шунт ~100Ω) ---
 #define ADC_CURRENT_PIN 3        // GPIO3 для ADC
 #define ADC_CHANNEL     ADC_CHANNEL_2  // ADC1_CH2
@@ -59,9 +54,10 @@
 // Максимальная длина имени пресета
 #define PRESET_NAME_MAX_LEN     128
 
-// === X9C103S PARAMETERS ===
-#define X9C_MAX_STEPS       99
-#define X9C_PULSE_DELAY_US  1     // Задержка импульса (мкс)
+// === GAIN CONTROL ===
+#define DEFAULT_GAIN            1.0f    // Коэффициент усиления по умолчанию (без изменений)
+#define MIN_GAIN                0.0f    // Минимальный gain (полное подавление)
+// Максимальный gain не ограничен (защита через насыщение int16)
 
 #endif // CONFIG_H
 

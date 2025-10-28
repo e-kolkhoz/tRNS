@@ -34,22 +34,22 @@ enum HostMessageType : uint8_t {
 
 // Host → ESP32 (commands, 0x80-0xFF)
 enum DeviceCommand : uint8_t {
-  CMD_SET_POT     = 0x81,  // Установить потенциометр (1 byte: 0-99)
-  CMD_GET_POT     = 0x87,  // Получить позицию потенциометра (response: 1 byte)
   CMD_GET_ADC     = 0x82,  // Запросить ADC буфер
   CMD_SET_DAC     = 0x83,  // Загрузить DAC буфер (payload: samples)
   CMD_SET_PARAMS  = 0x84,  // Установить параметры (freq, amp)
   CMD_GET_STATUS  = 0x85,  // Запросить статус
   CMD_RESET       = 0x86,  // Сброс устройства
+  CMD_SET_GAIN    = 0x88,  // Установить gain (float32)
+  CMD_GET_GAIN    = 0x89,  // Получить текущий gain
 };
 
 // === STATUS STRUCTURE ===
 // ВАЖНО: После структуры идёт строка имени пресета (переменной длины)
 // Формат: [DeviceStatus fixed] [preset_name: variable length string]
 struct DeviceStatus {
-  uint8_t pot_position;     // Позиция потенциометра (0-99)
   uint32_t adc_samples;     // Количество собранных ADC сэмплов
   uint16_t adc_rate;        // Частота ADC (Hz)
+  float gain;               // Коэффициент усиления (gain)
   uint8_t error_flags;      // Флаги ошибок
   // preset_name идёт ПОСЛЕ структуры (переменная длина, до конца пакета)
 } __attribute__((packed));

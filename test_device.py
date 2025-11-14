@@ -268,16 +268,16 @@ def example_basic():
     
     # Управление gain (коэффициент усиления)
     print("\n=== Управление gain ===")
-    dev.set_gain(1.5)  # Увеличить амплитуду в 1.5 раза
+    dev.set_gain(3.5)  # Увеличить амплитуду в 1.5 раза
     time.sleep(0.1)
     gain = dev.get_gain()
     
-    dev.set_gain(0.5)  # Уменьшить амплитуду в 2 раза
-    time.sleep(0.1)
-    gain = dev.get_gain()
+    # dev.set_gain(1.5)  # Уменьшить амплитуду в 2 раза
+    # time.sleep(0.1)
+    # gain = dev.get_gain()
     
-    dev.set_gain(1.0)  # Вернуть к исходной
-    time.sleep(0.1)
+    # dev.set_gain(1.0)  # Вернуть к исходной
+    # time.sleep(0.1)
     
     # Получить ADC данные
     print("\n=== ADC данные ===")

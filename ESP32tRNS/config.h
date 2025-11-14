@@ -16,8 +16,8 @@
 
 // === I2S DMA CONFIG (для DAC - PCM5102A) ===
 #define I2S_NUM             I2S_NUM_0
-#define DMA_BUFFER_COUNT    16   // Количество DMA дескрипторов
-#define DMA_BUFFER_LEN      512  // Сэмплов в каждом буфере (512*2*2 = 2KB на буфер)
+#define DMA_BUFFER_COUNT    40   // Количество DMA дескрипторов (40×400 = 16000 фреймов = 2.00 сек @ 8kHz)
+#define DMA_BUFFER_LEN      400  // Стерео-фреймов в каждом буфере (400 фреймов × 4 байта = 1600 байт)
 
 // === PIN CONFIGURATION ===
 

@@ -11,6 +11,11 @@ static bool adc_capture_enabled = false;
 static bool adc_capture_pending = false;
 static uint32_t adc_capture_resume_ms = 0;
 
+// Скользящее среднее по 3 сэмплам (сглаживание)
+static int16_t ma_buffer[3] = {0, 0, 0};  // Кольцевой буфер на 3 элемента
+static uint8_t ma_index = 0;              // Позиция записи
+static float ma_avg = 0.0f;               // Текущее среднее
+
 // Вспомогательная функция для сброса буфера ADC в запрещенное значение
 static void resetADCRingBufferInternal() {
   if (adc_ring_buffer) {
@@ -19,6 +24,30 @@ static void resetADCRingBufferInternal() {
     }
   }
   adc_write_index = 0;
+  
+  // Сбрасываем скользящее среднее
+  ma_buffer[0] = ma_buffer[1] = ma_buffer[2] = 0;
+  ma_index = 0;
+  ma_avg = 0.0f;
+}
+
+// Применить скользящее среднее по 3 сэмплам (фильтр нижних частот)
+// Формула: new_avg = old_avg + (new_sample - oldest_sample) / N
+static inline int16_t applyMovingAverage(int16_t new_sample) {
+  // Берём самый старый сэмпл (который сейчас будет перезаписан)
+  int16_t oldest = ma_buffer[ma_index];
+  
+  // Обновляем среднее
+  ma_avg = ma_avg + (new_sample - oldest) / 3.0f;
+  
+  // Записываем новое значение поверх самого старого
+  ma_buffer[ma_index] = new_sample;
+  
+  // Двигаем индекс по кругу (0 -> 1 -> 2 -> 0 ...)
+  ma_index = (ma_index + 1) % 3;
+  
+  // Возвращаем округлённое среднее
+  return (int16_t)(ma_avg + 0.5f);
 }
 
 // Вычисление размера окна статистики в сэмплах (не больше размера буфера)
@@ -142,8 +171,11 @@ void readADCFromDMA() {
       
       // Проверяем что это наш канал
       if (chan_num == ADC_CHANNEL && adc_capture_enabled) {
-        // Записываем в кольцевой буфер
-        adc_ring_buffer[adc_write_index] = (int16_t)data;
+        // Применяем скользящее среднее (фильтр [1/3, 1/3, 1/3])
+        int16_t filtered = applyMovingAverage((int16_t)data);
+        
+        // Записываем отфильтрованное значение в кольцевой буфер
+        adc_ring_buffer[adc_write_index] = filtered;
         adc_write_index = (adc_write_index + 1) % ADC_RING_SIZE;
       }
     }

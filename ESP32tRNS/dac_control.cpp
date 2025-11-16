@@ -142,6 +142,9 @@ void initDAC() {
   usbLogf("I2S initialized. DMA ring buffer: %d samples (%.1f sec)", 
           total_dma_samples, (float)total_dma_samples / SAMPLE_RATE);
   
+  // Заполняем stereo_buffer из signal_buffer
+  fillStereoBuffer();
+  
   // Предзаполняем DMA буферы
   prefillDMABuffers();
   

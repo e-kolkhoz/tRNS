@@ -59,12 +59,12 @@ class tRNSDevice:
         
     def send_command(self, cmd, payload=b''):
         """Отправить команду устройству"""
-        # Формируем пакет
+        # Формируем пакет (теперь length = uint32)
         msg_type = cmd
         length = len(payload)
         
-        # Вычисляем CRC
-        header = struct.pack('<BH', msg_type, length)
+        # Вычисляем CRC (header теперь 5 байт: type + len32)
+        header = struct.pack('<BI', msg_type, length)
         crc_data = header + payload
         crc = calc_crc16(crc_data)
         
@@ -91,12 +91,12 @@ class tRNSDevice:
         else:
             raise TimeoutError("Magic bytes not found")
         
-        # Читаем заголовок
-        header = self.ser.read(3)
-        if len(header) < 3:
+        # Читаем заголовок (type(1) + length(4) = 5 байт)
+        header = self.ser.read(5)
+        if len(header) < 5:
             raise ValueError("Incomplete header")
         
-        msg_type, length = struct.unpack('<BH', header)
+        msg_type, length = struct.unpack('<BI', header)
         
         # Читаем payload
         payload = b''
@@ -119,23 +119,55 @@ class tRNSDevice:
         if crc_received != crc_calculated:
             raise ValueError(f"CRC mismatch: {crc_received:04X} != {crc_calculated:04X}")
         
+        # Диагностика: показываем текстовые логи от ESP32
+        if msg_type == MSG_TEXT:
+            text = payload.decode('utf-8', errors='ignore')
+            print(f"[ESP32 LOG] {text}")
+        
         return msg_type, payload
     
     def get_adc_data(self):
-        """Получить ADC буфер"""
+        """Получить ADC буфер (теперь приходит одним пакетом с uint32 length)"""
         print("Запрос ADC данных...")
         self.send_command(CMD_GET_ADC)
         
-        msg_type, payload = self.receive_packet(timeout=5.0)
+        # Читаем пакеты, пропуская логи
+        start_time = time.time()
+        timeout = 5.0
         
-        if msg_type == MSG_ADC_DATA:
-            # Парсим данные
-            samples = np.frombuffer(payload, dtype=np.int16)
-            print(f"✓ Получено {len(samples)} сэмплов")
-            return samples
-        elif msg_type == MSG_ERROR:
-            print(f"✗ Ошибка: {payload.decode()}")
-            return None
+        while (time.time() - start_time) < timeout:
+            try:
+                remaining_timeout = timeout - (time.time() - start_time)
+                if remaining_timeout <= 0:
+                    break
+                    
+                msg_type, payload = self.receive_packet(timeout=remaining_timeout)
+                
+                # MSG_TEXT уже выводится в receive_packet
+                if msg_type == MSG_TEXT:
+                    continue  # Пропускаем логи, идём дальше
+                
+                print(f"DEBUG: msg_type = 0x{msg_type:02X}, payload size = {len(payload)} bytes")
+                
+                if msg_type == MSG_ADC_DATA:
+                    # Парсим данные (весь буфер одним пакетом)
+                    samples = np.frombuffer(payload, dtype=np.int16)
+                    print(f"✓ Получено {len(samples)} сэмплов")
+                    print(f"  Первые 10 значений: {samples[:10]}")
+                    print(f"  Min={samples.min()}, Max={samples.max()}, Mean={samples.mean():.1f}")
+                    return samples
+                    
+                elif msg_type == MSG_ERROR:
+                    print(f"✗ Ошибка: {payload.decode()}")
+                    return None
+                else:
+                    print(f"✗ Неожиданный тип сообщения: 0x{msg_type:02X}")
+                    
+            except TimeoutError:
+                break
+        
+        print("✗ Таймаут: ADC данные не получены")
+        return None
     
     def get_status(self):
         """Получить статус устройства (включая имя текущего пресета и gain)"""
@@ -268,9 +300,9 @@ def example_basic():
     
     # Управление gain (коэффициент усиления)
     print("\n=== Управление gain ===")
-    dev.set_gain(3.5)  # Увеличить амплитуду в 1.5 раза
-    time.sleep(0.1)
-    gain = dev.get_gain()
+    # dev.set_gain(3.5)  # Увеличить амплитуду в 1.5 раза
+    # time.sleep(0.1)
+    # gain = dev.get_gain()
     
     # dev.set_gain(1.5)  # Уменьшить амплитуду в 2 раза
     # time.sleep(0.1)

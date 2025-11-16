@@ -18,10 +18,10 @@ Protocol::Protocol(Stream& stream)
 
 // === CRC16-CCITT ===
 // Polynomial: 0x1021 (x^16 + x^12 + x^5 + 1)
-uint16_t Protocol::calcCRC16(const uint8_t* data, uint16_t len) {
+uint16_t Protocol::calcCRC16(const uint8_t* data, uint32_t len) {
   uint16_t crc = 0xFFFF;
   
-  for (uint16_t i = 0; i < len; i++) {
+  for (uint32_t i = 0; i < len; i++) {
     crc ^= ((uint16_t)data[i]) << 8;
     for (uint8_t j = 0; j < 8; j++) {
       if (crc & 0x8000) {
@@ -37,13 +37,20 @@ uint16_t Protocol::calcCRC16(const uint8_t* data, uint16_t len) {
 
 // === SENDING ===
 
-void Protocol::sendPacket(uint8_t msg_type, const uint8_t* payload, uint16_t len) {
+void Protocol::sendPacket(uint8_t msg_type, const uint8_t* payload, uint32_t len) {
   // Вычисляем CRC (type + len + payload)
-  uint8_t header[3] = { msg_type, (uint8_t)(len & 0xFF), (uint8_t)(len >> 8) };
+  // header теперь 5 байт: type(1) + len(4)
+  uint8_t header[5] = { 
+    msg_type, 
+    (uint8_t)(len & 0xFF), 
+    (uint8_t)((len >> 8) & 0xFF),
+    (uint8_t)((len >> 16) & 0xFF),
+    (uint8_t)((len >> 24) & 0xFF)
+  };
   
   uint16_t crc = 0xFFFF;
   // CRC от header
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 5; i++) {
     crc ^= ((uint16_t)header[i]) << 8;
     for (uint8_t j = 0; j < 8; j++) {
       if (crc & 0x8000) crc = (crc << 1) ^ 0x1021;
@@ -51,7 +58,7 @@ void Protocol::sendPacket(uint8_t msg_type, const uint8_t* payload, uint16_t len
     }
   }
   // CRC от payload
-  for (uint16_t i = 0; i < len; i++) {
+  for (uint32_t i = 0; i < len; i++) {
     crc ^= ((uint16_t)payload[i]) << 8;
     for (uint8_t j = 0; j < 8; j++) {
       if (crc & 0x8000) crc = (crc << 1) ^ 0x1021;
@@ -59,12 +66,14 @@ void Protocol::sendPacket(uint8_t msg_type, const uint8_t* payload, uint16_t len
     }
   }
   
-  // Отправляем пакет
+  // Отправляем пакет: magic(2) + type(1) + len(4) + payload + crc(2)
   _stream.write(PROTOCOL_MAGIC_0);
   _stream.write(PROTOCOL_MAGIC_1);
   _stream.write(msg_type);
   _stream.write((uint8_t)(len & 0xFF));
-  _stream.write((uint8_t)(len >> 8));
+  _stream.write((uint8_t)((len >> 8) & 0xFF));
+  _stream.write((uint8_t)((len >> 16) & 0xFF));
+  _stream.write((uint8_t)((len >> 24) & 0xFF));
   
   if (len > 0 && payload != nullptr) {
     _stream.write(payload, len);
@@ -96,9 +105,8 @@ void Protocol::sendError(const char* error_text) {
 }
 
 void Protocol::sendADCData(const int16_t* buffer, uint32_t sample_count) {
-  // Отправляем данные порциями, если нужно
-  // Пока отправляем всё за раз (max 40000 samples = 80KB)
-  uint16_t byte_count = sample_count * sizeof(int16_t);
+  // Отправляем весь буфер одним пакетом (uint32_t length поддерживает до 4GB)
+  uint32_t byte_count = sample_count * sizeof(int16_t);
   sendPacket(MSG_ADC_DATA, (const uint8_t*)buffer, byte_count);
 }
 
@@ -125,7 +133,7 @@ void Protocol::sendStatus(const DeviceStatus& status, const char* preset_name) {
   }
 }
 
-void Protocol::sendBinary(uint8_t msg_type, const uint8_t* data, uint16_t len) {
+void Protocol::sendBinary(uint8_t msg_type, const uint8_t* data, uint32_t len) {
   sendPacket(msg_type, data, len);
 }
 
@@ -163,16 +171,27 @@ void Protocol::poll() {
         
       case WAIT_TYPE:
         _rx_msg_type = byte;
-        _rx_state = WAIT_LEN_LOW;
+        _rx_payload_len = 0;  // Сбрасываем перед чтением
+        _rx_state = WAIT_LEN_0;
         break;
         
-      case WAIT_LEN_LOW:
+      case WAIT_LEN_0:
         _rx_payload_len = byte;
-        _rx_state = WAIT_LEN_HIGH;
+        _rx_state = WAIT_LEN_1;
         break;
         
-      case WAIT_LEN_HIGH:
-        _rx_payload_len |= ((uint16_t)byte) << 8;
+      case WAIT_LEN_1:
+        _rx_payload_len |= ((uint32_t)byte) << 8;
+        _rx_state = WAIT_LEN_2;
+        break;
+        
+      case WAIT_LEN_2:
+        _rx_payload_len |= ((uint32_t)byte) << 16;
+        _rx_state = WAIT_LEN_3;
+        break;
+        
+      case WAIT_LEN_3:
+        _rx_payload_len |= ((uint32_t)byte) << 24;
         
         if (_rx_payload_len == 0) {
           // Нет payload, сразу ждём CRC
@@ -206,16 +225,18 @@ void Protocol::poll() {
       case WAIT_CRC_HIGH:
         _rx_crc_expected |= ((uint16_t)byte) << 8;
         
-        // Проверяем CRC
-        uint8_t header[3] = { 
+        // Проверяем CRC (теперь header 5 байт: type + len32)
+        uint8_t header[5] = { 
           _rx_msg_type, 
           (uint8_t)(_rx_payload_len & 0xFF), 
-          (uint8_t)(_rx_payload_len >> 8) 
+          (uint8_t)((_rx_payload_len >> 8) & 0xFF),
+          (uint8_t)((_rx_payload_len >> 16) & 0xFF),
+          (uint8_t)((_rx_payload_len >> 24) & 0xFF)
         };
         
         uint16_t crc = 0xFFFF;
         // CRC от header
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 5; i++) {
           crc ^= ((uint16_t)header[i]) << 8;
           for (uint8_t j = 0; j < 8; j++) {
             if (crc & 0x8000) crc = (crc << 1) ^ 0x1021;
@@ -223,7 +244,7 @@ void Protocol::poll() {
           }
         }
         // CRC от payload
-        for (uint16_t i = 0; i < _rx_payload_len; i++) {
+        for (uint32_t i = 0; i < _rx_payload_len; i++) {
           crc ^= ((uint16_t)_rx_buffer[i]) << 8;
           for (uint8_t j = 0; j < 8; j++) {
             if (crc & 0x8000) crc = (crc << 1) ^ 0x1021;
@@ -245,7 +266,7 @@ void Protocol::poll() {
   }
 }
 
-void Protocol::processCommand(uint8_t cmd, const uint8_t* payload, uint16_t len) {
+void Protocol::processCommand(uint8_t cmd, const uint8_t* payload, uint32_t len) {
   // Вызываем callback если установлен
   if (_cmd_handler != nullptr) {
     _cmd_handler(cmd, payload, len);

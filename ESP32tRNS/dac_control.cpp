@@ -1,5 +1,8 @@
 #include "dac_control.h"
 #include "usb_commands.h"
+#include "display_control.h"
+#include "adc_control.h"
+#include "preset_storage.h"
 #include <math.h>
 
 // Глобальные переменные
@@ -14,6 +17,13 @@ static int16_t LEFT_CHANNEL_CONST = 0;
 // Временный стерео-буфер для отправки в I2S DMA
 // Формируется на лету из МОНО signal_buffer + LEFT_CHANNEL_CONST
 static int16_t* stereo_buffer = NULL;
+static const uint32_t STEREO_BUFFER_SIZE = SIGNAL_SAMPLES * 2;
+
+// Позиция в stereo_buffer для кольцевого доступа (в стерео-сэмплах)
+static uint32_t stereo_buffer_pos = 0;
+
+// Буфер для фрагмента (FRAGMENT_SAMPLES стерео-сэмплов)
+static int16_t* stereo_buffer_fragment = NULL;
 
 // Заполнить стерео-буфер из МОНО: [L_CONST, R*gain, L_CONST, R*gain, ...]
 // С применением gain и насыщением для int16
@@ -35,6 +45,44 @@ static void fillStereoBuffer() {
   }
 }
 
+// Копировать фрагмент из stereo_buffer в stereo_buffer_fragment с кольцевым доступом
+static void copyFragmentFromStereoBuffer(uint32_t start_pos) {
+  for (uint32_t i = 0; i < FRAGMENT_SAMPLES; i++) {
+    uint32_t src_idx = (start_pos + i) % STEREO_BUFFER_SIZE;
+    stereo_buffer_fragment[i] = stereo_buffer[src_idx];
+  }
+}
+
+// Записать подготовленный фрагмент во внутренний DMA буфер I2S
+// timeout_ticks = 0 → неблокирующий; больше 0 → ждём указанное время
+static bool writeFragmentToDMA(TickType_t timeout_ticks) {
+  const uint32_t start_pos = stereo_buffer_pos;
+  copyFragmentFromStereoBuffer(start_pos);
+  
+  size_t bytes_written = 0;
+  const size_t bytes_to_write = FRAGMENT_SAMPLES * sizeof(int16_t);
+  
+  esp_err_t result = i2s_write(I2S_NUM,
+                               stereo_buffer_fragment,
+                               bytes_to_write,
+                               &bytes_written,
+                               timeout_ticks);
+  
+  if (result == ESP_OK && bytes_written > 0) {
+    uint32_t samples_written = bytes_written / sizeof(int16_t);
+    stereo_buffer_pos = (start_pos + samples_written) % STEREO_BUFFER_SIZE;
+    return true;
+  }
+  
+  if (result == ESP_ERR_TIMEOUT || bytes_written == 0) {
+    // DMA заполнен - ничего страшного, позицию не меняем
+    return false;
+  }
+  
+  usbWarn("i2s_write error while feeding DMA");
+  return false;
+}
+
 // Инициализация I2S и DMA для DAC
 void initDAC() {
   usbLog("=== I2S DAC Init (PCM5102A) ===");
@@ -51,6 +99,18 @@ void initDAC() {
     return;
   }
   usbLogf("Stereo temp buffer: %d bytes", SIGNAL_SAMPLES * 2 * sizeof(int16_t));
+  
+  // Выделяем буфер для фрагмента
+  stereo_buffer_fragment = (int16_t*)malloc(FRAGMENT_SAMPLES * sizeof(int16_t));
+  if (!stereo_buffer_fragment) {
+    usbError("Failed to allocate fragment buffer!");
+    return;
+  }
+  usbLogf("Fragment buffer: %d samples (%d ms), %d bytes", 
+          FRAGMENT_SAMPLES, FRAGMENT_SIZE_MS, FRAGMENT_SAMPLES * sizeof(int16_t));
+  
+  // Сбрасываем позицию в начале
+  stereo_buffer_pos = 0;
   
   // Конфигурация I2S с большими DMA буферами
   i2s_config_t i2s_config = {
@@ -98,88 +158,63 @@ void setSignalBuffer(int16_t* new_buffer, int num_samples) {
   // Заменяем указатель (МОНО буфер - только правый канал)
   signal_buffer = new_buffer;
   
+  // Пересобираем стерео-буфер с новым сигналом
+  fillStereoBuffer();
+  
+  // Сбрасываем позицию для кольцевого доступа
+  stereo_buffer_pos = 0;
+  
   // Сбрасываем флаг предзаполнения, чтобы DMA перезагрузилась
   dma_prefilled = false;
   prefillDMABuffers();
+  
+  // Обновляем дисплей с новым пресетом
+  refreshDisplay();
   
   usbLogf("Signal buffer updated: %d samples (MONO)", num_samples);
 }
 
 // Генерация демо-сигнала (синус 640 Гц) - для отладки
 void generateDemoSignal() {
-  int16_t ampl_val = (int16_t)(MAX_VAL * DAC_RIGHT_AMPL_VOLTS / MAX_VOLT);
-  const int samples_per_cycle = SAMPLE_RATE / 640;
-  
-  usbLog("Generating demo sine wave (640 Hz)...");
-  
-  // Генерируем ТОЛЬКО МОНО (правый канал)!
-  // Левый канал = константа, не храним в памяти
-  for (int i = 0; i < SIGNAL_SAMPLES; i++) {
-    float t = (float)(i % samples_per_cycle) / samples_per_cycle;
-    signal_buffer[i] = (int16_t)(sinf(2.0f * M_PI * t) * ampl_val);
-  }
-  
-  // Устанавливаем имя пресета
-  snprintf(current_preset_name, PRESET_NAME_MAX_LEN, "tACS %dHz 1mA demo", 640);
+  float actual_freq = buildDemoPreset(signal_buffer,
+                                      SIGNAL_SAMPLES,
+                                      current_preset_name,
+                                      PRESET_NAME_MAX_LEN);
   
   usbLog("Demo signal generated!");
-  usbLogf("Preset: '%s'", current_preset_name);
+  if (actual_freq > 0.0f) {
+    usbLogf("Preset: '%s' (%.2f Hz loop-aligned)", current_preset_name, actual_freq);
+  } else {
+    usbLogf("Preset: '%s'", current_preset_name);
+  }
 }
 
 // Предзаполнение DMA буферов
 void prefillDMABuffers() {
   usbLog("Prefilling DMA buffers...");
   
-  // Формируем стерео из МОНО + константа
-  fillStereoBuffer();
+  // Сбрасываем позицию
+  stereo_buffer_pos = 0;
+  int fragments_written = 0;
   
-  const int total_dma_samples = DMA_BUFFER_COUNT * DMA_BUFFER_LEN;
-  int samples_written = 0;
-  
-  // Заполняем все DMA буферы, циклически повторяя наш сигнал
-  while (samples_written < total_dma_samples) {
-    size_t bytes_written = 0;
-    
-    // Отправляем стерео-буфер в I2S
-    esp_err_t result = i2s_write(I2S_NUM, 
-                                   stereo_buffer, 
-                                   SIGNAL_SAMPLES * 2 * sizeof(int16_t), 
-                                   &bytes_written, 
-                                   portMAX_DELAY);
-    
-    if (result != ESP_OK) {
-      usbError("i2s_write failed during prefill");
-      break;
-    }
-    
-    samples_written += bytes_written / (2 * sizeof(int16_t));
+  // Пытаемся заполнить DMA до отказа
+  while (writeFragmentToDMA(pdMS_TO_TICKS(1))) {
+    fragments_written++;
   }
   
-  dma_prefilled = true;
-  usbLogf("DMA prefilled: %d samples written", samples_written);
+  dma_prefilled = fragments_written > 0;
+  usbLogf("DMA prefilled: %d fragments (~%.1f ms)", 
+          fragments_written,
+          fragments_written * (float)FRAGMENT_SIZE_MS);
+  
+  // Запускаем сбор ADC после небольшой задержки, чтобы исключить стартовые переходные процессы
+  scheduleADCCaptureStart(ADC_CAPTURE_DELAY_MS);
 }
 
 // Поддержание DMA буферов заполненными (неблокирующе!)
-void keepDMAFilled() {
-  size_t bytes_written = 0;
-  
-  // Стерео-буфер уже заполнен, просто отправляем с коротким timeout
-  // (fillStereoBuffer уже вызван в prefillDMABuffers или setSignalBuffer)
-  
-  // Пытаемся отправить данные с КОРОТКИМ timeout (1 мс)
-  // Если DMA буфер полон - функция вернётся быстро, и мы продолжим loop()
-  esp_err_t result = i2s_write(I2S_NUM, 
-                                 stereo_buffer, 
-                                 SIGNAL_SAMPLES * 2 * sizeof(int16_t), 
-                                 &bytes_written, 
-                                 pdMS_TO_TICKS(1));  // КОРОТКИЙ timeout!
-  
-  // Если что-то записали - хорошо
-  // Если DMA полон (bytes_written == 0) - тоже норм, значит звук играет
-  // Ошибки логируем только если критичные
-  if (result != ESP_OK && result != ESP_ERR_TIMEOUT) {
-    usbWarn("i2s_write error in keepDMAFilled");
-  }
+// Возвращает true если удалось отправить новый фрагмент
+bool keepDMAFilled() {
+  return writeFragmentToDMA(pdMS_TO_TICKS(1));
 }
 
 // === GAIN CONTROL ===
@@ -195,6 +230,12 @@ void setDACGain(float gain) {
   // Пересобираем стерео-буфер с новым gain
   fillStereoBuffer();
   
+  // Позицию не сбрасываем - новый gain применится постепенно через фрагменты
+  // Это обеспечивает плавное изменение без щелчков
+  
+  // Обновляем дисплей с новым gain
+  refreshDisplay();
+  
   usbLogf("DAC Gain set to %.2f", dac_gain);
 }
 
@@ -203,4 +244,40 @@ float getDACGain() {
   return dac_gain;
 }
 
-
+// Построить гистограмму из пресета (signal_buffer)
+bool buildPresetHistogram(uint16_t* bins, uint8_t num_bins) {
+  if (bins == NULL || num_bins == 0 || signal_buffer == NULL) {
+    return false;
+  }
+  
+  // Инициализируем bins
+  for (uint8_t i = 0; i < num_bins; i++) {
+    bins[i] = 0;
+  }
+  
+  // Находим min/max для нормализации
+  int16_t min_val = 32767;
+  int16_t max_val = -32768;
+  
+  for (int i = 0; i < SIGNAL_SAMPLES; i++) {
+    if (signal_buffer[i] < min_val) min_val = signal_buffer[i];
+    if (signal_buffer[i] > max_val) max_val = signal_buffer[i];
+  }
+  
+  if (min_val == max_val) {
+    return false;
+  }
+  
+  // Строим гистограмму
+  float range = max_val - min_val;
+  for (int i = 0; i < SIGNAL_SAMPLES; i++) {
+    // Определяем в какой bin попадает значение
+    float normalized = (signal_buffer[i] - min_val) / range;
+    uint8_t bin_index = (uint8_t)(normalized * num_bins);
+    if (bin_index >= num_bins) bin_index = num_bins - 1;
+    
+    bins[bin_index]++;
+  }
+  
+  return true;
+}

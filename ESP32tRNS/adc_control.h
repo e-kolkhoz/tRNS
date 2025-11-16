@@ -27,5 +27,22 @@ void getADCRingBuffer(int16_t* output_buffer, uint32_t* current_write_pos);
 // Печать статистики ADC буфера (для отладки)
 void printADCStats();
 
+// Получить минимальное и максимальное напряжение с ADC (в вольтах)
+// Возвращает true если есть валидные данные, false если буфер ещё не заполнен
+bool getADCMinMaxVoltage(float* min_voltage, float* max_voltage);
+
+// Получить перцентили (1%, 99%) и среднее напряжение с ADC (в вольтах)
+// Возвращает true если есть валидные данные, false если буфер ещё не заполнен
+bool getADCPercentiles(float* p1_voltage, float* p99_voltage, float* mean_voltage);
+
+// Построить гистограмму из ADC данных
+// bins - массив для хранения гистограммы (размер должен быть num_bins)
+// num_bins - количество столбцов гистограммы (рекомендуется 16-20)
+// Возвращает true если есть валидные данные
+bool buildADCHistogram(uint16_t* bins, uint8_t num_bins);
+
+// Запланировать старт записи ADC после задержки (сбрасывает буфер)
+void scheduleADCCaptureStart(uint32_t delay_ms);
+
 #endif // ADC_CONTROL_H
 

@@ -1,7 +1,15 @@
 #include "usb_commands.h"
 #include "adc_control.h"
 #include "dac_control.h"
+#include "preset_storage.h"
 #include <stdarg.h>
+
+// Check if USB CDC is ready
+static inline bool isUSBReady() {
+  // Просто проверяем что Serial инициализирован и доступен для записи
+  return Serial && Serial.availableForWrite() > 0;
+}
+
 
 // Глобальный объект протокола
 Protocol* usbProtocol = nullptr;
@@ -11,34 +19,36 @@ static unsigned long lastStatusSendTime = 0;
 static const unsigned long STATUS_SEND_INTERVAL = 1000; // 1 сек
 
 // Callback для обработки команд
-static void commandHandler(uint8_t cmd, const uint8_t* payload, uint16_t len) {
+static void commandHandler(uint8_t cmd, const uint8_t* payload, uint32_t len) {
+  // Диагностика: логируем все входящие команды
+  usbLogf("CMD received: 0x%02X, len=%u", cmd, len);
+  
   switch (cmd) {
     case CMD_GET_ADC:
       // Отправить ADC буфер
       {
+        if (!usbProtocol) {
+          break; // Протокол не инициализирован
+        }
+        
         uint32_t write_pos;
         int16_t* temp_buffer = (int16_t*)malloc(ADC_RING_SIZE * sizeof(int16_t));
         
-        if (temp_buffer) {
-          getADCRingBuffer(temp_buffer, &write_pos);
-          
-          // Отправляем данные + позицию записи в начале
-          uint8_t header[4] = {
-            (uint8_t)(write_pos & 0xFF),
-            (uint8_t)((write_pos >> 8) & 0xFF),
-            (uint8_t)((write_pos >> 16) & 0xFF),
-            (uint8_t)((write_pos >> 24) & 0xFF)
-          };
-          
-          // Отправляем header + данные одним пакетом
-          // TODO: если слишком большой, можно разбить на несколько пакетов
-          usbProtocol->sendADCData(temp_buffer, ADC_RING_SIZE);
-          
-          free(temp_buffer);
-          usbLogf("ADC buffer sent (%u samples, write_pos=%u)", ADC_RING_SIZE, write_pos);
-        } else {
+        if (!temp_buffer) {
           usbProtocol->sendError("ADC: Out of memory");
+          break;
         }
+        
+        // Копируем данные из кольцевого буфера
+        getADCRingBuffer(temp_buffer, &write_pos);
+        
+        // Отправляем данные (только если USB готов)
+        if (isUSBReady()) {
+          usbProtocol->sendADCData(temp_buffer, ADC_RING_SIZE);
+          usbLogf("ADC buffer sent (%u samples, write_pos=%u)", ADC_RING_SIZE, write_pos);
+        }
+        
+        free(temp_buffer);
       }
       break;
       
@@ -48,7 +58,7 @@ static void commandHandler(uint8_t cmd, const uint8_t* payload, uint16_t len) {
       {
         const uint16_t buffer_size = SIGNAL_SAMPLES * sizeof(int16_t); // 32000 bytes (МОНО!)
         
-        if (len >= buffer_size) {
+        if (len >= buffer_size && usbProtocol && isUSBReady()) {
           // Копируем МОНО буфер (только правый канал)
           memcpy(signal_buffer, payload, buffer_size);
           
@@ -69,6 +79,11 @@ static void commandHandler(uint8_t cmd, const uint8_t* payload, uint16_t len) {
           // Перезаполняем DMA новым сигналом
           setSignalBuffer(signal_buffer, SIGNAL_SAMPLES);
           
+          // Сохраняем пресет во flash для автозагрузки при старте
+          if (!savePresetToFlash(signal_buffer, current_preset_name)) {
+            usbWarn("Failed to save preset to flash");
+          }
+          
           usbProtocol->sendAck();
           usbLogf("DAC buffer updated (MONO): '%s'", current_preset_name);
         } else {
@@ -86,7 +101,7 @@ static void commandHandler(uint8_t cmd, const uint8_t* payload, uint16_t len) {
       
     case CMD_SET_GAIN:
       // Установить gain (коэффициент усиления)
-      if (len >= sizeof(float)) {
+      if (len >= sizeof(float) && usbProtocol && isUSBReady()) {
         float gain;
         memcpy(&gain, payload, sizeof(float));
         setDACGain(gain);
@@ -98,7 +113,7 @@ static void commandHandler(uint8_t cmd, const uint8_t* payload, uint16_t len) {
       
     case CMD_GET_GAIN:
       // Получить текущий gain
-      {
+      if (usbProtocol && isUSBReady()) {
         float gain = getDACGain();
         usbProtocol->sendBinary(MSG_ACK, (uint8_t*)&gain, sizeof(float));
         usbLogf("GAIN: Current gain = %.2f", gain);
@@ -107,7 +122,7 @@ static void commandHandler(uint8_t cmd, const uint8_t* payload, uint16_t len) {
       
     case CMD_GET_STATUS:
       // Отправить статус + имя пресета
-      {
+      if (usbProtocol && isUSBReady()) {
         DeviceStatus status;
         status.adc_samples = ADC_RING_SIZE;
         status.adc_rate = ADC_SAMPLE_RATE;
@@ -120,10 +135,12 @@ static void commandHandler(uint8_t cmd, const uint8_t* payload, uint16_t len) {
       
     case CMD_RESET:
       // Сброс устройства
-      usbProtocol->sendAck();
-      usbLog("Resetting device...");
-      delay(100);
-      ESP.restart();
+      if (usbProtocol && isUSBReady()) {
+        usbProtocol->sendAck();
+        usbLog("Resetting device...");
+        delay(100);
+        ESP.restart();
+      }
       break;
       
     default:
@@ -170,7 +187,7 @@ void sendPeriodicStatus() {
 // === LOGGING WRAPPERS ===
 
 void usbLog(const char* text) {
-  if (usbProtocol) {
+  if (usbProtocol && isUSBReady()) {
     usbProtocol->sendText(text);
   }
 }
@@ -192,7 +209,7 @@ void usbWarn(const char* text) {
 }
 
 void usbError(const char* text) {
-  if (usbProtocol) {
+  if (usbProtocol && isUSBReady()) {
     usbProtocol->sendError(text);
   }
 }

@@ -38,7 +38,8 @@ void generateDemoSignal();
 void prefillDMABuffers();
 
 // Поддержание DMA буферов заполненными (неблокирующе!)
-void keepDMAFilled();
+// Возвращает true, если новый фрагмент удалось поставить в DMA
+bool keepDMAFilled();
 
 // === GAIN CONTROL ===
 
@@ -48,6 +49,12 @@ void setDACGain(float gain);
 
 // Получить текущий gain
 float getDACGain();
+
+// Построить гистограмму из пресета (signal_buffer)
+// bins - массив для хранения гистограммы (размер должен быть num_bins)
+// num_bins - количество столбцов гистограммы (рекомендуется 16-20)
+// Возвращает true если есть данные
+bool buildPresetHistogram(uint16_t* bins, uint8_t num_bins);
 
 #endif // DAC_CONTROL_H
 

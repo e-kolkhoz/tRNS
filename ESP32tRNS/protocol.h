@@ -9,17 +9,17 @@
 // 
 // Packet format:
 // ┌──────────────────────────────────────────────────┐
-// │ Magic (2) │ Type (1) │ Len (2) │ Payload │ CRC16 │
+// │ Magic (2) │ Type (1) │ Len (4) │ Payload │ CRC16 │
 // └──────────────────────────────────────────────────┘
-//    0xAA55     1 byte    uint16    N bytes   uint16
+//    0xAA55     1 byte    uint32    N bytes   uint16
 //
-// Total overhead: 7 bytes per packet
+// Total overhead: 9 bytes per packet
 
 // === PROTOCOL CONSTANTS ===
 #define PROTOCOL_MAGIC_0    0xAA
 #define PROTOCOL_MAGIC_1    0x55
-#define PROTOCOL_OVERHEAD   7       // magic(2) + type(1) + len(2) + crc(2)
-#define PROTOCOL_MAX_PAYLOAD 65535  // uint16 max
+#define PROTOCOL_OVERHEAD   9          // magic(2) + type(1) + len(4) + crc(2)
+#define PROTOCOL_MAX_PAYLOAD 0xFFFFFFFF  // uint32 max (4GB)
 
 // === MESSAGE TYPES ===
 
@@ -78,7 +78,7 @@ public:
   void sendStatus(const DeviceStatus& status, const char* preset_name);
   
   // Отправить произвольные бинарные данные
-  void sendBinary(uint8_t msg_type, const uint8_t* data, uint16_t len);
+  void sendBinary(uint8_t msg_type, const uint8_t* data, uint32_t len);
   
   // === RECEIVING ===
   
@@ -87,7 +87,7 @@ public:
   void poll();
   
   // Callback для обработки команд (установить через setCommandHandler)
-  typedef void (*CommandHandler)(uint8_t cmd, const uint8_t* payload, uint16_t len);
+  typedef void (*CommandHandler)(uint8_t cmd, const uint8_t* payload, uint32_t len);
   void setCommandHandler(CommandHandler handler);
   
 private:
@@ -104,22 +104,24 @@ private:
     WAIT_MAGIC_0,
     WAIT_MAGIC_1,
     WAIT_TYPE,
-    WAIT_LEN_LOW,
-    WAIT_LEN_HIGH,
+    WAIT_LEN_0,
+    WAIT_LEN_1,
+    WAIT_LEN_2,
+    WAIT_LEN_3,
     WAIT_PAYLOAD,
     WAIT_CRC_LOW,
     WAIT_CRC_HIGH
   };
   RxState _rx_state;
   uint8_t _rx_msg_type;
-  uint16_t _rx_payload_len;
-  uint16_t _rx_payload_received;
+  uint32_t _rx_payload_len;
+  uint32_t _rx_payload_received;
   uint16_t _rx_crc_expected;
   
   // Внутренние функции
-  void sendPacket(uint8_t msg_type, const uint8_t* payload, uint16_t len);
-  uint16_t calcCRC16(const uint8_t* data, uint16_t len);
-  void processCommand(uint8_t cmd, const uint8_t* payload, uint16_t len);
+  void sendPacket(uint8_t msg_type, const uint8_t* payload, uint32_t len);
+  uint16_t calcCRC16(const uint8_t* data, uint32_t len);
+  void processCommand(uint8_t cmd, const uint8_t* payload, uint32_t len);
   void resetRxState();
 };
 

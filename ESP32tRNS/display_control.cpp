@@ -117,25 +117,19 @@ void refreshDisplay() {
     u8g2.drawStr(0, 28, "ADC: waiting...");
   }
   
-  // === СТРОКИ 3-6: Гистограммы (пресет и ADC) ===
+  // === СТРОКИ 3-6: Гистограмму ADC ===
   const uint8_t NUM_BINS = 16;  // 16 столбцов для гистограммы
-  uint16_t preset_bins[NUM_BINS];
   uint16_t adc_bins[NUM_BINS];
-  
-  bool preset_hist_ok = buildPresetHistogram(preset_bins, NUM_BINS);
   bool adc_hist_ok = buildADCHistogram(adc_bins, NUM_BINS);
   
-  if (preset_hist_ok && adc_hist_ok) {
+  if (adc_hist_ok) {
     // Находим максимальное значение для нормализации высоты столбцов
-    uint16_t max_preset = 0;
     uint16_t max_adc = 0;
     for (uint8_t i = 0; i < NUM_BINS; i++) {
-      if (preset_bins[i] > max_preset) max_preset = preset_bins[i];
       if (adc_bins[i] > max_adc) max_adc = adc_bins[i];
     }
     
-    uint16_t max_both = (max_preset > max_adc) ? max_preset : max_adc;
-    if (max_both == 0) max_both = 1;  // Защита от деления на ноль
+    if (max_adc == 0) max_adc = 1;  // Защита от деления на ноль
     
     // Высота области для гистограмм: 64 - 24 = 40 пикселей
     // Делим пополам: по 20 пикселей на каждую гистограмму
@@ -145,35 +139,19 @@ void refreshDisplay() {
     const uint8_t BIN_WIDTH = 7;        // Ширина столбца (128 / 16 = 8, но с отступами 7)
     const uint8_t BIN_SPACING = 1;      // Отступ между столбцами
     
-    // Рисуем гистограмму пресета (верхняя)
-    /*
-    for (uint8_t i = 0; i < NUM_BINS; i++) {
-      uint8_t x = i * (BIN_WIDTH + BIN_SPACING);
-      uint8_t height = (preset_bins[i] * HIST_HEIGHT) / max_both;
-      if (height > 0) {
-        u8g2.drawBox(x, HIST_Y_PRESET + HIST_HEIGHT - height, BIN_WIDTH, height);
-      }
-    }
-    */
     
-    // Рисуем гистограмму ADC (нижняя)
+    // Рисуем гистограмму ADC
     for (uint8_t i = 0; i < NUM_BINS; i++) {
       uint8_t x = i * (BIN_WIDTH + BIN_SPACING);
-      uint8_t height = (adc_bins[i] * HIST_HEIGHT) / max_both;
+      uint8_t height = (adc_bins[i] * HIST_HEIGHT) / max_adc;
       if (height > 0) {
         u8g2.drawBox(x, HIST_Y_ADC + HIST_HEIGHT - height, BIN_WIDTH, height);
       }
     }
-    
-    // Подписи
-    u8g2.setFont(u8g2_font_5x7_tf);  // Маленький шрифт для подписей
-    // u8g2.drawStr(0, HIST_Y_PRESET - 1, "Preset");
-    //u8g2.drawStr(0, HIST_Y_ADC - 1, "ADC");
   } else {
     u8g2.setFont(u8g2_font_6x10_tf);
     u8g2.drawStr(0, 30, "Histograms: waiting...");
-  }
-  
+  }  
   u8g2.sendBuffer();
 }
 

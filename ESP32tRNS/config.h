@@ -9,10 +9,10 @@
 // === TIMING CONFIG ===
 #define SAMPLE_RATE         8000
 
-// Буфер DAC: 2 секунды (для любых пресетов - tACS, tRNS, tDCS и т.д.)
+// Буфер DAC: 16384 сэмпла (2.048 сек @ 8kHz) - FFT-friendly размер (степень 2)
 // ВАЖНО: Храним только МОНО (правый канал), левый - константа для ADC!
-#define LOOP_DURATION_SEC   2
-#define SIGNAL_SAMPLES      (SAMPLE_RATE * LOOP_DURATION_SEC)  // 16000 samples = 2 sec МОНО
+#define SIGNAL_SAMPLES      16384  // Ровно 2^14 для FFT без растекания спектра
+#define LOOP_DURATION_SEC   ((float)SIGNAL_SAMPLES / SAMPLE_RATE)  // 2.048 сек
 
 // === I2S DMA CONFIG (для DAC - PCM5102A) ===
 #define I2S_NUM             I2S_NUM_0
@@ -46,20 +46,27 @@
 // === ADC DMA CONFIG ===
 // Сигнал на шунте: ±0.1-0.2V + смещение 0.5V = диапазон 0.3-0.7V
 // Для tRNS (100-640 Hz) достаточно 20 kHz
-#define ADC_SAMPLE_RATE     20000   // Частота семплирования (20 kHz - оптимально)
-#define ADC_FRAME_SIZE      1024    // Размер фрейма DMA (сэмплов)
-#define ADC_DMA_BUF_COUNT   4       // Количество DMA буферов
-#define ADC_READ_TIMEOUT_MS 100     // Timeout для чтения
-#define ADC_CENTER_V        0.6175f // Центральное напряжение, соотвтетствующее нулю вольт
-#define ADC_V_TO_MA         10.0f   // Множитель для получения тока в mA
+#define ADC_SAMPLE_RATE      20000   // Частота семплирования (20 kHz - оптимально)
+#define ADC_FRAME_SIZE       1024    // Размер фрейма DMA (сэмплов)
+#define ADC_DMA_BUF_COUNT    4       // Количество DMA буферов
+#define ADC_READ_TIMEOUT_MS  100     // Timeout для чтения
+#define ADC_CENTER_V         0.6175f // Центральное напряжение, соответствующее нулю вольт
+#define ADC_V_TO_MA          10.0f   // Множитель для получения тока в mA
 #define ADC_CAPTURE_DELAY_MS 200    // Задержка запуска записи ADC после старта DAC (мс)
-#define ADC_STATS_WINDOW_MS 200     // Окно статистики/гистограммы для ADC (мс)
+#define ADC_STATS_WINDOW_MS  200    // Окно статистики/гистограммы для ADC (мс)
 #define ADC_STATS_WINDOW_SAMPLES ((ADC_STATS_WINDOW_MS * ADC_SAMPLE_RATE) / 1000)
 
+// Границы гистограммы в ADC кодах (0-4095)
+// Конвертация: voltage → ADC = (voltage / 1.1V) * 4095
+// -0.1V от центра → 0.5175V → ADC ≈ 1927
+// +0.1V от центра → 0.7175V → ADC ≈ 2671
+#define ADC_MAX_LOW_HIST_VAL  ((int16_t)(((ADC_CENTER_V - 1.0f/ADC_V_TO_MA) / 1.1f) * 4095.0f))
+#define ADC_MIN_HI_HIST_VAL   ((int16_t)(((ADC_CENTER_V + 1.0f/ADC_V_TO_MA) / 1.1f) * 4095.0f))
+
 // Кольцевой буфер для накопления данных
-// ВАЖНО: Буфер согласован с DAC лупом (2 сек)! 
+// ВАЖНО: Буфер согласован с DAC лупом (2.048 сек)! 
 // ADC = 1× DAC луп → квадратное окно без растекания спектра
-#define ADC_RING_SIZE       40000  // 2 сек @ 20kHz = 1× DAC луп (16000 @ 8kHz)
+#define ADC_RING_SIZE       40960  // 2.048 сек @ 20kHz = 1× DAC луп (16384 @ 8kHz)
 #define ADC_INVALID_VALUE   -32768 // Запрещенное значение (метка "данных ещё нет")
 
 // === DAC SIGNAL PARAMETERS ===

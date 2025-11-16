@@ -34,11 +34,10 @@ void setup() {
   // Без этого Arduino IDE не сможет прошить без нажатия кнопок
   delay(1000);
   
-  // Диагностика: LED для проверки старта (одна вспышка)
+  // Диагностика: LED для проверки старта
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
-  delay(100);
-  digitalWrite(LED_BUILTIN, LOW);  // Выключаем после вспышки
+
   
   // Инициализируем Serial БЕЗ ожидания
   Serial.begin(921600);

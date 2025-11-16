@@ -416,6 +416,10 @@ bool buildADCHistogram(uint16_t* bins, uint8_t num_bins) {
     if (temp_buffer[i] < min_val) min_val = temp_buffer[i];
     if (temp_buffer[i] > max_val) max_val = temp_buffer[i];
   }
+
+  if(min_val > ADC_MAX_LOW_HIST_VAL) min_val = ADC_MAX_LOW_HIST_VAL;
+  if(max_val < ADC_MIN_HI_HIST_VAL)  max_val = ADC_MIN_HI_HIST_VAL;
+  
   
   if (min_val == max_val) {
     free(temp_buffer);

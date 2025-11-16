@@ -30,13 +30,15 @@ float buildDemoPreset(int16_t* target_buffer,
     return 0.0f;
   }
   
+  // Выбираем целое число циклов, максимально близкое к 640 Hz
+  // Для 16384 сэмплов @ 8kHz: 640 Hz ≈ 1311 циклов → actual = 640.137 Hz
   const float desired_freq = 640.0f;
-  // Выбираем количество целых циклов, чтобы петля замыкалась идеально
   uint32_t cycles = (uint32_t)((desired_freq * sample_count) / SAMPLE_RATE + 0.5f);
   if (cycles == 0) {
     cycles = 1;
   }
   
+  // Точная частота для целого числа циклов (гарантирует loop без разрывов)
   float actual_freq = ((float)cycles * SAMPLE_RATE) / sample_count;
   int16_t amplitude = (int16_t)(MAX_VAL * DAC_RIGHT_AMPL_VOLTS / MAX_VOLT);
   

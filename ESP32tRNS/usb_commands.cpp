@@ -79,9 +79,14 @@ static void commandHandler(uint8_t cmd, const uint8_t* payload, uint32_t len) {
           // Перезаполняем DMA новым сигналом
           setSignalBuffer(signal_buffer, SIGNAL_SAMPLES);
           
-          // Сохраняем пресет во flash для автозагрузки при старте
-          if (!savePresetToFlash(signal_buffer, current_preset_name)) {
-            usbWarn("Failed to save preset to flash");
+          // Сохраняем пресет в NVS для автозагрузки при старте
+          usbLogf("Saving preset '%s' to NVS...", current_preset_name);
+          bool save_ok = savePresetToFlash(signal_buffer, current_preset_name);
+          
+          if (save_ok) {
+            usbLog("Preset saved successfully!");
+          } else {
+            usbWarn("Failed to save preset to NVS");
           }
           
           usbProtocol->sendAck();

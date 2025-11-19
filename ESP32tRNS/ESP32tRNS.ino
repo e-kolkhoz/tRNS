@@ -31,85 +31,70 @@
 
 void setup() {
   // КРИТИЧНО: Задержка перед инициализацией Serial для esptool!
-  // Без этого Arduino IDE не сможет прошить без нажатия кнопок
   delay(1000);
   
   // Диагностика: LED для проверки старта
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
-
   
   // Инициализируем Serial БЕЗ ожидания
   Serial.begin(921600);
+  Serial.setRxBufferSize(40960);  // Увеличиваем RX буфер до 40KB (для CMD_SET_DAC)
   delay(100);
-  
   initUSBProtocol();
 
-  usbLog("=== tRNS/tACS Device Booting ===");
-  usbLog("Hardware: LOLIN S2 Mini (ESP32-S2)");
-
+  // ============================================================
+  // === BOOT SEQUENCE с отображением на OLED ===
+  // ============================================================
+  
+  // Шаг 1: Инициализация OLED (первым делом, чтобы показывать прогресс)
+  initDisplay();
+  
   // Шаг 2: Выделение памяти под ADC буфер
+  showBootScreen("Allocate ADC...");
   adc_ring_buffer = (int16_t*)malloc(ADC_RING_SIZE * sizeof(int16_t));
   if (!adc_ring_buffer) {
-    usbError("Failed to allocate ADC ring buffer!");
-    while (1) { delay(1000); }  // Зависаем с постоянно горящим LED
+    showBootScreen("ADC alloc FAIL!");
+    while (1) { delay(1000); }
   }
-
   for (uint32_t i = 0; i < ADC_RING_SIZE; i++) {
     adc_ring_buffer[i] = ADC_INVALID_VALUE;
   }
 
-  usbLogf("ADC ring buffer: %d samples (%.1f sec @ %d Hz), %d KB",
-          ADC_RING_SIZE,
-          (float)ADC_RING_SIZE / ADC_SAMPLE_RATE,
-          ADC_SAMPLE_RATE,
-          (ADC_RING_SIZE * sizeof(int16_t)) / 1024);
-  usbLog("ADC buffer = 1× DAC loop (time-aligned for spectral analysis)");
-
   // Шаг 3: Инициализация ADC DMA
+  showBootScreen("Init ADC DMA...");
   initADC();
 
   // Шаг 4: Выделение памяти под DAC сигнал
+  showBootScreen("Allocate DAC...");
   signal_buffer = (int16_t*)malloc(SIGNAL_SAMPLES * sizeof(int16_t));
   if (!signal_buffer) {
-    usbError("Failed to allocate signal buffer!");
+    showBootScreen("DAC alloc FAIL!");
     while (1) { delay(1000); }
   }
 
-  usbLogf("Signal buffer: %d samples MONO (%.1f sec), %d KB",
-          SIGNAL_SAMPLES, (float)LOOP_DURATION_SEC,
-          (SIGNAL_SAMPLES * sizeof(int16_t)) / 1024);
-
-  // Шаг 5: Загрузка пресета из SPIFFS
-  // ВРЕМЕННО ОТКЛЮЧЕНО для диагностики
-  // bool preset_loaded = false;
-  // if (initPresetStorage()) {
-  //   preset_loaded = loadPresetFromFlash(signal_buffer,
-  //                                       current_preset_name,
-  //                                       PRESET_NAME_MAX_LEN);
-  // }
-  // if (!preset_loaded) {
-  generateDemoSignal();
-  // }
+  // Шаг 5: Загрузка пресета из NVS или генерация дефолтного
+  bool preset_loaded = false;
+  bool storage_ok = initPresetStorage();
+  if (storage_ok) {
+    preset_loaded = loadPresetFromFlash(signal_buffer, current_preset_name, PRESET_NAME_MAX_LEN);
+  }
+  if (!preset_loaded) {
+    showBootScreen("Gen demo signal...");
+    generateDemoSignal();
+  }
 
   // Шаг 6: Инициализация I2S DAC
+  showBootScreen("Init DAC DMA...");
   initDAC();
 
-  // Шаг 7: Инициализация OLED дисплея
-  initDisplay();
+  // Финальный экран
+  showBootScreen("Starting...");
+  delay(500);
+  
+  // Переключаемся на нормальный интерфейс
   setDisplayStatus("Ready");
-
-  // --- Итоги ---
-  // DAC: МОНО буфер + стерео temp = 32KB + 64KB = 96KB
-  // ADC: 40000 samples = 80KB
-  // Итого: 176KB (вместо 144KB, но зато экономия на USB!)
-  int dac_memory = (SIGNAL_SAMPLES * sizeof(int16_t)) + (SIGNAL_SAMPLES * 2 * sizeof(int16_t));
-  int adc_memory = ADC_RING_SIZE * sizeof(int16_t);
-  int total_memory = dac_memory + adc_memory;
-  usbLogf("Total memory: DAC=%dKB (mono+stereo temp), ADC=%dKB, Total=%dKB / 320KB SRAM",
-          dac_memory / 1024, adc_memory / 1024, total_memory / 1024);
-
-  usbLog("=== Ready! ===");
+  refreshDisplay();
 }
 
 // ============================================================================

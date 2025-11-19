@@ -25,5 +25,8 @@ void refreshDisplay();
 // Сбросить таймер отображения (отсчёт времени на экране)
 void resetDisplayTimer();
 
+// Показать экран загрузки с шагом инициализации
+void showBootScreen(const char* step);
+
 #endif // DISPLAY_CONTROL_H
 

@@ -18,34 +18,48 @@ static uint32_t timer_start_ms = 0;  // Начальная точка тайме
 
 // Инициализация дисплея
 void initDisplay() {
-  usbLog("=== OLED Display Init ===");
-  
   // Инициализация I2C
   Wire.begin(I2C_SDA, I2C_SCL);
   Wire.setClock(I2C_FREQ);
   
   // Инициализация дисплея
-  // Если дисплей не определяется, попробуйте:
-  // 1. Изменить адрес: u8g2.setI2CAddress(DISPLAY_ADDR * 2); // адрес в U8g2 = адрес * 2
-  // 2. Заменить класс на U8G2_SH1106_128X64_NONAME_F_HW_I2C для SH1106
   u8g2.begin();
-  u8g2.setFont(u8g2_font_6x10_tf);  // Основной шрифт
+  u8g2.setFont(u8g2_font_6x10_tf);
   u8g2.setFontRefHeightExtendedText();
   u8g2.setDrawColor(1);
   u8g2.setFontPosTop();
   u8g2.setFontDirection(0);
   timer_start_ms = millis();
   
-  // Очистка и приветствие
+  // Приветственный экран
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_9x15B_tf);
+  u8g2.drawStr(10, 10, "tRNS/tACS");
+  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.drawStr(20, 35, "Booting...");
+  u8g2.sendBuffer();
+}
+
+// Показать экран загрузки с шагом инициализации
+void showBootScreen(const char* step) {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_7x14B_tf);
   u8g2.drawStr(0, 0, "tRNS/tACS");
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0, 20, "Device Starting...");
-  u8g2.sendBuffer();
   
-  usbLogf("OLED Display initialized (I2C: SDA=%d, SCL=%d, Addr=0x%02X)", 
-          I2C_SDA, I2C_SCL, DISPLAY_ADDR);
+  // Рисуем шаг инициализации
+  u8g2.drawStr(0, 20, step);
+  
+  // Анимация загрузки (точки)
+  static uint8_t dots = 0;
+  dots = (dots + 1) % 4;
+  char progress[8] = "";
+  for (uint8_t i = 0; i < dots; i++) {
+    strcat(progress, ".");
+  }
+  u8g2.drawStr(0, 35, progress);
+  
+  u8g2.sendBuffer();
 }
 
 // Обновление дисплея с текущими метриками
@@ -69,17 +83,18 @@ void refreshDisplay() {
   u8g2.setFont(u8g2_font_6x10_tf);
   
   // Название пресета (обрезаем если длинное)
-  char preset_display[23];
+  char preset_display[24];
   const char* preset_name = current_preset_name;
   int len = strlen(preset_name);
-  if (len > 22) {
-    strncpy(preset_display, preset_name, 23);
-    preset_display[19] = '.';
+  if (len > 23) {
+    strncpy(preset_display, preset_name, 21);
     preset_display[20] = '.';
     preset_display[21] = '.';
-    preset_display[22] = '\0';
+    preset_display[22] = '.';
+    preset_display[23] = '\0';
   } else {
-    strncpy(preset_display, preset_name, 23);
+    strncpy(preset_display, preset_name, 24);
+    preset_display[23] = '\0';
   }
   u8g2.drawStr(0, 0, preset_display);
 
@@ -118,7 +133,7 @@ void refreshDisplay() {
   }
   
   // === СТРОКИ 3-6: Гистограмму ADC ===
-  const uint8_t NUM_BINS = 16;  // 16 столбцов для гистограммы
+  const uint8_t NUM_BINS = 15;  // 16 столбцов для гистограммы
   uint16_t adc_bins[NUM_BINS];
   bool adc_hist_ok = buildADCHistogram(adc_bins, NUM_BINS);
   
@@ -126,6 +141,7 @@ void refreshDisplay() {
     // Находим максимальное значение для нормализации высоты столбцов
     uint16_t max_adc = 0;
     for (uint8_t i = 0; i < NUM_BINS; i++) {
+
       if (adc_bins[i] > max_adc) max_adc = adc_bins[i];
     }
     
@@ -136,13 +152,13 @@ void refreshDisplay() {
     const uint8_t HIST_HEIGHT = 18;  // Высота столбцов гистограммы
     //const uint8_t HIST_Y_PRESET = 26;  // Y координата для пресета
     const uint8_t HIST_Y_ADC = 26;     // Y координата для ADC
-    const uint8_t BIN_WIDTH = 7;        // Ширина столбца (128 / 16 = 8, но с отступами 7)
+    const uint8_t BIN_WIDTH = 7;        // Ширина столбца (128 / 15 = 8, но с отступами 7)
     const uint8_t BIN_SPACING = 1;      // Отступ между столбцами
     
     
     // Рисуем гистограмму ADC
     for (uint8_t i = 0; i < NUM_BINS; i++) {
-      uint8_t x = i * (BIN_WIDTH + BIN_SPACING);
+      uint8_t x = i * (BIN_WIDTH + BIN_SPACING) + 4;
       uint8_t height = (adc_bins[i] * HIST_HEIGHT) / max_adc;
       if (height > 0) {
         u8g2.drawBox(x, HIST_Y_ADC + HIST_HEIGHT - height, BIN_WIDTH, height);

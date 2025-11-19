@@ -6,12 +6,13 @@
 
 ```
 ┌────────────────────────────────────────────────────┐
-│ Magic (2) │ Type (1) │ Length (2) │ Payload │ CRC16 │
+│ Magic (2) │ Type (1) │ Length (4) │ Payload │ CRC16 │
 └────────────────────────────────────────────────────┘
-   0xAA55     1 byte     uint16 LE    N bytes   uint16 LE
+   0xAA55     1 byte     uint32 LE    N bytes   uint16 LE
 
-Overhead: 7 байт
+Overhead: 9 байт
 CRC: CRC16-CCITT (polynomial 0x1021)
+Max payload: 4 GB (практически без ограничений)
 ```
 
 ## Типы сообщений
@@ -21,7 +22,7 @@ CRC: CRC16-CCITT (polynomial 0x1021)
 | Type | Название | Payload | Описание |
 |------|----------|---------|----------|
 | `0x01` | TEXT_MESSAGE | string | Текстовые логи, warnings |
-| `0x02` | ADC_DATA | int16[] | ADC буфер (40000 samples) |
+| `0x02` | ADC_DATA | int16[] | ADC буфер (40960 samples @ 20kHz = 2.048 сек) |
 | `0x03` | STATUS | struct | Статус устройства |
 | `0x04` | ACK | empty | Подтверждение команды |
 | `0x05` | ERROR | string | Ошибка выполнения |
@@ -68,19 +69,19 @@ struct DeviceStatus {
 
 **Отправка:**
 ```
-AA 55          # Magic
-82             # CMD_GET_ADC
-00 00          # Length = 0
-XX XX          # CRC16
+AA 55                # Magic
+82                   # CMD_GET_ADC
+00 00 00 00          # Length = 0 (uint32)
+XX XX                # CRC16
 ```
 
 **Ответ:**
 ```
-AA 55          # Magic
-02             # MSG_ADC_DATA
-40 9C          # Length = 40000 (0x9C40)
-[80KB data]    # 40000 × int16
-XX XX          # CRC16
+AA 55                # Magic
+02                   # MSG_ADC_DATA
+00 A0 00 00          # Length = 40960 (0xA000, uint32)
+[81920 bytes data]   # 40960 × int16
+XX XX                # CRC16
 ```
 
 ### 2. Загрузить DAC буфер (пресет)
@@ -89,10 +90,10 @@ XX XX          # CRC16
 ```
 AA 55                      # Magic
 83                         # CMD_SET_DAC
-2C 7D                      # Length = 32012 (0x7D2C)
-                           #   = 32000 bytes MONO + 12 bytes name
-[32000 bytes]              # int16[] MONO (16000 samples)
-"tACS 640Hz\0"             # Preset name (null-terminated)
+8C 80 00 00                # Length = 32780 (0x808C, uint32)
+                           #   = 32768 bytes MONO + 12 bytes name
+[32768 bytes]              # int16[] MONO (16384 samples)
+"tACS 640Hz\0"             # Preset name (переменная длина)
 XX XX                      # CRC16
 ```
 
@@ -100,28 +101,30 @@ XX XX                      # CRC16
 ```
 [int16_t buffer[SIGNAL_SAMPLES]] + [char preset_name[]]
   ^--- МОНО (только правый канал)    ^--- переменная длина
-  32000 bytes (16000 samples)
+  32768 bytes (16384 samples)
 ```
 
-**Важно:** Левый канал = константа (-0.5V), не передаётся!
+**Важно:** 
+- Левый канал = константа (-0.5V), не передаётся!
+- Пресет сохраняется на SPIFFS и загружается при следующем запуске
 
 ### 3. Установить gain (коэффициент усиления)
 
 **Отправка (Host → ESP32):**
 ```
-AA 55          # Magic
-88             # CMD_SET_GAIN
-04 00          # Length = 4
-XX XX XX XX    # float32 gain (например, 1.5)
-XX XX          # CRC16
+AA 55                # Magic
+88                   # CMD_SET_GAIN
+04 00 00 00          # Length = 4 (uint32)
+XX XX XX XX          # float32 gain (например, 1.5)
+XX XX                # CRC16
 ```
 
 **Ответ (ESP32 → Host):**
 ```
-AA 55          # Magic
-04             # MSG_ACK
-00 00          # Length = 0
-XX XX          # CRC16
+AA 55                # Magic
+04                   # MSG_ACK
+00 00 00 00          # Length = 0 (uint32)
+XX XX                # CRC16
 ```
 
 **Пример:** Установить gain = 2.0 (удвоить амплитуду)
@@ -131,10 +134,10 @@ XX XX          # CRC16
 
 **Отправка (Host → ESP32):**
 ```
-AA 55          # Magic
-89             # CMD_GET_GAIN
-00 00          # Length = 0
-XX XX          # CRC16
+AA 55                # Magic
+89                   # CMD_GET_GAIN
+00 00 00 00          # Length = 0 (uint32)
+XX XX                # CRC16
 ```
 
 **Ответ (ESP32 → Host):**

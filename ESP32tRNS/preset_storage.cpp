@@ -1,23 +1,11 @@
 #include "preset_storage.h"
-#include <FS.h>
-#include <SPIFFS.h>
 #include <string.h>
 #include <math.h>
-#include "usb_commands.h"
+#include "presets_embedded.h"
 
-static bool preset_storage_initialized = false;
-static const char* PRESET_FILE_PATH = "/preset.bin";
-static const uint32_t PRESET_FILE_MAGIC = 0x54535250;  // 'PRST'
-static const uint32_t PRESET_FILE_VERSION = 1;
-
-typedef struct __attribute__((packed)) {
-  uint32_t magic;
-  uint32_t version;
-  uint32_t sample_rate;
-  uint32_t sample_count;
-  uint32_t loop_duration_ms;
-  char preset_name[PRESET_NAME_MAX_LEN];
-} PresetFileHeader;
+// Preset storage работает только в RAM
+// При старте загружается встроенный пресет из PROGMEM
+// Через USB можно загрузить новый пресет, он живёт до reset
 
 float buildDemoPreset(int16_t* target_buffer,
                       size_t sample_count,
@@ -30,15 +18,10 @@ float buildDemoPreset(int16_t* target_buffer,
     return 0.0f;
   }
   
-  // Выбираем целое число циклов, максимально близкое к 640 Hz
-  // Для 16384 сэмплов @ 8kHz: 640 Hz ≈ 1311 циклов → actual = 640.137 Hz
   const float desired_freq = 640.0f;
   uint32_t cycles = (uint32_t)((desired_freq * sample_count) / SAMPLE_RATE + 0.5f);
-  if (cycles == 0) {
-    cycles = 1;
-  }
+  if (cycles == 0) cycles = 1;
   
-  // Точная частота для целого числа циклов (гарантирует loop без разрывов)
   float actual_freq = ((float)cycles * SAMPLE_RATE) / sample_count;
   int16_t amplitude = (int16_t)(MAX_VAL * DAC_RIGHT_AMPL_VOLTS / MAX_VOLT);
   
@@ -57,126 +40,39 @@ float buildDemoPreset(int16_t* target_buffer,
   return actual_freq;
 }
 
-static bool ensurePresetStorageMounted() {
-  if (preset_storage_initialized) {
-    return true;
-  }
-  
-  if (!SPIFFS.begin(true)) {
-    usbWarn("SPIFFS mount failed (preset storage unavailable)");
-    return false;
-  }
-  
-  preset_storage_initialized = true;
-  usbLog("Preset storage initialized (SPIFFS)");
-  return true;
-}
-
 bool initPresetStorage() {
-  return ensurePresetStorageMounted();
+  // Инициализация не требуется для embedded пресетов
+  return true;
 }
 
 bool loadPresetFromFlash(int16_t* target_buffer,
                          char* preset_name_out,
                          size_t preset_name_len) {
-  if (target_buffer == NULL || preset_name_out == NULL || preset_name_len == 0) {
+  // Загружаем первый встроенный пресет из PROGMEM
+  if (EMBEDDED_PRESETS_COUNT == 0) {
     return false;
   }
   
-  if (!ensurePresetStorageMounted()) {
+  const EmbeddedPreset* preset = &EMBEDDED_PRESETS[0];
+  
+  if (preset->sample_count != SIGNAL_SAMPLES) {
     return false;
   }
   
-  if (!SPIFFS.exists(PRESET_FILE_PATH)) {
-    usbLog("Preset storage: no preset file found, using default waveform");
-    return false;
+  // Копируем из PROGMEM в RAM
+  memcpy_P(target_buffer, preset->samples, preset->sample_count * sizeof(int16_t));
+  
+  if (preset_name_out && preset_name_len > 0) {
+    strncpy(preset_name_out, preset->name, preset_name_len);
+    preset_name_out[preset_name_len - 1] = '\0';
   }
   
-  File presetFile = SPIFFS.open(PRESET_FILE_PATH, FILE_READ);
-  if (!presetFile) {
-    usbWarn("Preset storage: failed to open preset file");
-    return false;
-  }
-  
-  PresetFileHeader header;
-  size_t header_bytes = presetFile.readBytes((char*)&header, sizeof(header));
-  if (header_bytes != sizeof(header)) {
-    usbWarn("Preset storage: failed to read preset header");
-    presetFile.close();
-    return false;
-  }
-  
-  if (header.magic != PRESET_FILE_MAGIC || header.version != PRESET_FILE_VERSION) {
-    usbWarn("Preset storage: incompatible preset header");
-    presetFile.close();
-    return false;
-  }
-  
-  if (header.sample_count != SIGNAL_SAMPLES || header.sample_rate != SAMPLE_RATE) {
-    usbWarn("Preset storage: preset size mismatch, skipping");
-    presetFile.close();
-    return false;
-  }
-  
-  size_t data_bytes = SIGNAL_SAMPLES * sizeof(int16_t);
-  size_t read_bytes = presetFile.readBytes((char*)target_buffer, data_bytes);
-  presetFile.close();
-  
-  if (read_bytes != data_bytes) {
-    usbWarn("Preset storage: failed to read preset data");
-    return false;
-  }
-  
-  strncpy(preset_name_out, header.preset_name, preset_name_len);
-  preset_name_out[preset_name_len - 1] = '\0';
-  
-  usbLogf("Preset loaded from flash: '%s'", preset_name_out);
   return true;
 }
 
 bool savePresetToFlash(const int16_t* source_buffer,
                        const char* preset_name) {
-  if (source_buffer == NULL || preset_name == NULL) {
-    return false;
-  }
-  
-  if (!ensurePresetStorageMounted()) {
-    return false;
-  }
-  
-  File presetFile = SPIFFS.open(PRESET_FILE_PATH, FILE_WRITE);
-  if (!presetFile) {
-    usbWarn("Preset storage: failed to open preset file for writing");
-    return false;
-  }
-  
-  PresetFileHeader header = {};
-  header.magic = PRESET_FILE_MAGIC;
-  header.version = PRESET_FILE_VERSION;
-  header.sample_rate = SAMPLE_RATE;
-  header.sample_count = SIGNAL_SAMPLES;
-  header.loop_duration_ms = LOOP_DURATION_SEC * 1000;
-  strncpy(header.preset_name, preset_name, PRESET_NAME_MAX_LEN);
-  header.preset_name[PRESET_NAME_MAX_LEN - 1] = '\0';
-  
-  size_t header_written = presetFile.write((const uint8_t*)&header, sizeof(header));
-  if (header_written != sizeof(header)) {
-    usbWarn("Preset storage: failed to write header");
-    presetFile.close();
-    return false;
-  }
-  
-  size_t data_bytes = SIGNAL_SAMPLES * sizeof(int16_t);
-  size_t data_written = presetFile.write((const uint8_t*)source_buffer, data_bytes);
-  presetFile.close();
-  
-  if (data_written != data_bytes) {
-    usbWarn("Preset storage: failed to write data");
-    return false;
-  }
-  
-  usbLogf("Preset saved to flash: '%s' (%d bytes)", preset_name, (int)data_bytes);
-  return true;
+  // Сохранение в flash отключено — пресет живёт только в RAM
+  // После reset вернётся встроенный пресет
+  return false;
 }
-
-

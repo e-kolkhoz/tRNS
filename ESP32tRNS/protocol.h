@@ -94,10 +94,10 @@ private:
   Stream& _stream;
   CommandHandler _cmd_handler;
   
-  // Буфер для приёма
-  static const uint16_t RX_BUFFER_SIZE = 256;  // Для заголовков и малых команд
+  // Буфер для приёма (достаточно для пресета 32KB + запас)
+  static const uint32_t RX_BUFFER_SIZE = 40960;  // 40KB для CMD_SET_DAC
   uint8_t _rx_buffer[RX_BUFFER_SIZE];
-  uint16_t _rx_index;
+  uint32_t _rx_index;
   
   // Состояние приёмника
   enum RxState {

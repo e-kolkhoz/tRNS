@@ -1,2 +1,4 @@
 *.pcl
 *.ipynb_checkpoints
+*.bin
+*.pyc

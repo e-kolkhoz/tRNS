@@ -70,6 +70,11 @@ class tRNSDevice:
         
         # Отправляем пакет
         packet = PROTOCOL_MAGIC + header + payload + struct.pack('<H', crc)
+        
+        # Диагностика больших пакетов
+        if length > 1000:
+            print(f"  Отправка: cmd=0x{cmd:02X}, payload={length} байт, total={len(packet)} байт")
+        
         self.ser.write(packet)
         self.ser.flush()
     
@@ -231,6 +236,43 @@ class tRNSDevice:
             print(f"✗ Ошибка: {payload.decode()}")
             return None
     
+    def set_dac_preset(self, samples, preset_name):
+        """Загрузить пресет в DAC и сохранить в NVS"""
+        if len(samples) != 16384:
+            print(f"✗ Неверное количество сэмплов: {len(samples)} (ожидается 16384)")
+            return False
+        
+        # Упаковываем: сэмплы + имя пресета (имя в конце!)
+        samples_bytes = samples.astype(np.int16).tobytes()
+        name_bytes = preset_name.encode('utf-8')[:31]  # Макс 31 байт + \0
+        name_bytes = name_bytes + b'\0'  # Добавляем null-terminator
+        
+        payload = samples_bytes + name_bytes
+        
+        print(f"→ Отправка пресета '{preset_name}' ({len(samples)} сэмплов, {len(payload)} байт)...")
+        self.send_command(CMD_SET_DAC, payload)
+        print("  Ожидание сохранения в NVS (может занять несколько секунд)...")
+        
+        # Читаем ответ, пропуская MSG_TEXT логи
+        for _ in range(10):  # Макс 10 пакетов
+            msg_type, response = self.receive_packet(timeout=10.0)
+            
+            if msg_type == MSG_ACK:
+                print(f"✓ Пресет загружен и сохранён в NVS")
+                return True
+            elif msg_type == MSG_ERROR:
+                print(f"✗ Ошибка: {response.decode()}")
+                return False
+            elif msg_type == MSG_TEXT:
+                # Пропускаем логи (уже выведены в receive_packet)
+                continue
+            else:
+                print(f"✗ Неожиданный ответ: 0x{msg_type:02X}")
+                return False
+        
+        print(f"✗ Не получен ACK после 10 пакетов")
+        return False
+    
     def upload_dac_buffer(self, samples_mono, preset_name="Custom preset"):
         """
         Загрузить новый DAC буфер (пресет)
@@ -385,13 +427,52 @@ def example_generate_tacs():
         print(f"Активный пресет: '{status['preset_name']}'")
 
 
+def example_load_wav_preset(port='/dev/ttyACM0'):
+    """Загрузить пресет из WAV файла (16384 сэмпла, 16-бит, моно)"""
+    import wave
+    
+    print("=== Загрузка пресета из WAV ===")
+    
+    # Открываем WAV файл
+    wav_path = 'noise_100_640_8000Hz_16bit.wav'
+    with wave.open(wav_path, 'rb') as wav:
+        # Проверяем формат
+        assert wav.getnchannels() == 1, "Файл должен быть МОНО"
+        assert wav.getsampwidth() == 2, "Файл должен быть 16-бит"
+        assert wav.getframerate() == 8000, "Частота должна быть 8000 Гц"
+        # Читаем 16384 сэмпла
+        frames = wav.readframes(16384)
+        samples = np.frombuffer(frames, dtype=np.int16)
+        assert len(samples) == 16384, "должно быть строго 16384 отсчёта"
+
+        print(f"Загружено {len(samples)} сэмплов из {wav_path}")
+        print(f"  Min={samples.min()}, Max={samples.max()}, Mean={samples.mean():.1f}")
+
+    # Отправляем на устройство
+    dev = tRNSDevice(port=port)
+    preset_name = "tRNS 100-640Hz normal bipolar"
+
+    if dev.set_dac_preset(samples, preset_name):
+        print(f"✓ Пресет '{preset_name}' загружен и сохранён на устройстве")
+        print("  При следующем запуске устройство загрузит этот пресет автоматически")
+    else:
+        print("✗ Ошибка загрузки пресета")
+
+    # Проверяем статус
+    time.sleep(0.2)
+    status = dev.get_status()
+    if status:
+        print(f"Активный пресет: '{status['preset_name']}'")
+
+
 if __name__ == '__main__':
     print("=== tRNS/tACS Device Test ===\n")
     
     try:
         example_basic()
-        # example_generate_tacs()   # Загрузить синус 10 Гц
-        # example_generate_trns()   # Загрузить шум 100-640 Гц
+        # example_generate_tacs()      # Загрузить синус 10 Гц
+        # example_generate_trns()      # Загрузить шум 100-640 Гц
+        # example_load_wav_preset()    # Загрузить из WAV файла
         
     except serial.SerialException as e:
         print(f"Ошибка порта: {e}")

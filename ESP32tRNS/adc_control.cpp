@@ -1,5 +1,4 @@
 #include "adc_control.h"
-#include "usb_commands.h"
 
 // Глобальные переменные
 adc_continuous_handle_t adc_handle = NULL;
@@ -97,7 +96,6 @@ static bool IRAM_ATTR adc_dma_conv_done_callback(
 
 // Инициализация ADC в continuous mode (DMA!)
 void initADC() {
-  usbLog("=== ADC Continuous Mode (DMA) Init ===");
   resetADCRingBufferInternal();
   
   // Конфигурация continuous mode
@@ -134,12 +132,7 @@ void initADC() {
   
   // Запускаем continuous mode!
   ESP_ERROR_CHECK(adc_continuous_start(adc_handle));
-  
-  usbLog("ADC: DMA started!");
-  usbLog("ADC: 12-bit, 0-1.1V range (optimal for 0.3-0.7V)");
-  usbLogf("ADC: Sample rate: %d Hz", ADC_SAMPLE_RATE);
-  usbLogf("ADC: DMA buffers: %d × %d samples", ADC_DMA_BUF_COUNT, ADC_FRAME_SIZE);
-  usbLog("ADC: Continuous acquisition via DMA (like I2S for DAC!)");
+
 }
 
 // Чтение данных из ADC DMA и добавление в кольцевой буфер
@@ -151,7 +144,6 @@ void readADCFromDMA() {
   if (adc_capture_pending && now_ms >= adc_capture_resume_ms) {
     adc_capture_pending = false;
     adc_capture_enabled = true;
-    usbLog("ADC capture enabled");
   }
   
   // Читаем из DMA (неблокирующе с timeout)
@@ -182,7 +174,7 @@ void readADCFromDMA() {
   } else if (ret == ESP_ERR_TIMEOUT) {
     // Timeout - нормально, данных просто нет пока
   } else {
-    usbWarn("ADC read error");
+    // ADC read error
   }
 }
 
@@ -204,8 +196,6 @@ void getADCRingBuffer(int16_t* output_buffer, uint32_t* current_write_pos) {
 
 // Печать статистики ADC буфера (для отладки)
 void printADCStats() {
-  usbLog("=== ADC Ring Buffer Stats (DMA) ===");
-  usbLogf("Write position: %u / %u", adc_write_index, ADC_RING_SIZE);
   
   // Вычисляем статистику (пропускаем запрещенные значения)
   uint32_t sum = 0;
@@ -223,7 +213,6 @@ void printADCStats() {
   }
   
   if (valid_count == 0) {
-    usbLog("No valid data yet (DMA is starting...)");
     return;
   }
   
@@ -232,14 +221,7 @@ void printADCStats() {
   float voltage_avg = (avg / 4095.0) * 1.1;
   float voltage_min = (min_val / 4095.0) * 1.1;
   float voltage_max = (max_val / 4095.0) * 1.1;
-  
-  usbLogf("Valid samples: %u / %u (%.1f%%)", 
-          valid_count, ADC_RING_SIZE, 
-          (valid_count * 100.0) / ADC_RING_SIZE);
-  usbLogf("Average: %d (%.3fV)", avg, voltage_avg);
-  usbLogf("Min: %d (%.3fV), Max: %d (%.3fV)", 
-          min_val, voltage_min, max_val, voltage_max);
-  usbLogf("Peak-to-peak: %.3fV", voltage_max - voltage_min);
+
 }
 
 // Получить минимальное и максимальное напряжение с ADC (в вольтах)
@@ -443,6 +425,5 @@ void scheduleADCCaptureStart(uint32_t delay_ms) {
   adc_capture_enabled = false;
   adc_capture_pending = true;
   adc_capture_resume_ms = millis() + delay_ms;
-  usbLogf("ADC capture scheduled in %ums", delay_ms);
 }
 

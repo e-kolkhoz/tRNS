@@ -21,7 +21,6 @@
 #include "config.h"
 #include "dac_control.h"
 #include "adc_control.h"
-#include "usb_commands.h"
 #include "display_control.h"
 #include "preset_storage.h"
 
@@ -41,8 +40,6 @@ void setup() {
   Serial.begin(921600);
   Serial.setRxBufferSize(40960);  // Увеличиваем RX буфер до 40KB (для CMD_SET_DAC)
   delay(100);
-  initUSBProtocol();
-
   // ============================================================
   // === BOOT SEQUENCE с отображением на OLED ===
   // ============================================================
@@ -73,15 +70,11 @@ void setup() {
     while (1) { delay(1000); }
   }
 
-  // Шаг 5: Загрузка пресета из NVS или генерация дефолтного
-  bool preset_loaded = false;
-  bool storage_ok = initPresetStorage();
-  if (storage_ok) {
-    preset_loaded = loadPresetFromFlash(signal_buffer, current_preset_name, PRESET_NAME_MAX_LEN);
-  }
+  // Шаг 5: Загрузка пресета из PROGMEM (обязательно!)
+  bool preset_loaded = loadPresetFromFlash(signal_buffer, current_preset_name, PRESET_NAME_MAX_LEN);
   if (!preset_loaded) {
-    showBootScreen("Gen demo signal...");
-    generateDemoSignal();
+    showBootScreen("ERROR: No preset!");
+    while (1) { delay(1000); }  // Зависаем, без пресета работать нельзя
   }
 
   // Шаг 6: Инициализация I2S DAC
@@ -106,7 +99,6 @@ void loop() {
   // СТРАТЕГИЯ: Неблокирующий loop для работы в реальном времени
   // - ADC DMA: читается железом, мы забираем из DMA буфера
   // - DAC DMA: гоняется железом по кругу
-  // - Loop свободен для USB OTG команд от Android!
   // ============================================================
 
   // 1. Подкладываем данные в I2S DMA для DAC (неблокирующе, ~1мс)
@@ -115,14 +107,8 @@ void loop() {
   // 2. Читаем данные из ADC DMA и складываем в кольцевой буфер
   readADCFromDMA();
 
-  // 3. Обрабатываем USB OTG команды от Android/PC (неблокирующе!)
-  processUSBCommands();
-
-  // 4. Обновляем OLED дисплей (неблокирующе, с ограничением частоты)
+  // 3. Обновляем OLED дисплей (неблокирующе, с ограничением частоты)
   updateDisplay();
-
-  // 5. Опционально: отправляем периодические обновления статуса
-  // sendPeriodicStatus();
 
   // Минимальная задержка
   delay(1);

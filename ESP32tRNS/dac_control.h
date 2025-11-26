@@ -41,20 +41,5 @@ void prefillDMABuffers();
 // Возвращает true, если новый фрагмент удалось поставить в DMA
 bool keepDMAFilled();
 
-// === GAIN CONTROL ===
-
-// Установить коэффициент усиления (gain) для правого канала
-// gain >= 0.0 (без верхнего ограничения, защита через насыщение int16)
-void setDACGain(float gain);
-
-// Получить текущий gain
-float getDACGain();
-
-// Построить гистограмму из пресета (signal_buffer)
-// bins - массив для хранения гистограммы (размер должен быть num_bins)
-// num_bins - количество столбцов гистограммы (рекомендуется 16-20)
-// Возвращает true если есть данные
-bool buildPresetHistogram(uint16_t* bins, uint8_t num_bins);
-
 #endif // DAC_CONTROL_H
 

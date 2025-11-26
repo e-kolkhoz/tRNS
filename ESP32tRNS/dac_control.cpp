@@ -1,8 +1,6 @@
 #include "dac_control.h"
-#include "usb_commands.h"
 #include "display_control.h"
 #include "adc_control.h"
-#include "preset_storage.h"
 #include <math.h>
 
 // Глобальные переменные
@@ -79,35 +77,27 @@ static bool writeFragmentToDMA(TickType_t timeout_ticks) {
     return false;
   }
   
-  usbWarn("i2s_write error while feeding DMA");
+
   return false;
 }
 
 // Инициализация I2S и DMA для DAC
 void initDAC() {
-  usbLog("=== I2S DAC Init (PCM5102A) ===");
   
   // Вычисляем константу для левого канала (смещение ADC)
   LEFT_CHANNEL_CONST = (int16_t)(MAX_VAL * DAC_LEFT_OFFSET_VOLTS / MAX_VOLT);
-  usbLogf("Left channel const: %d (%.3fV for ADC offset)", 
-          LEFT_CHANNEL_CONST, DAC_LEFT_OFFSET_VOLTS);
   
   // Выделяем временный стерео-буфер для I2S DMA
   stereo_buffer = (int16_t*)malloc(SIGNAL_SAMPLES * 2 * sizeof(int16_t));
   if (!stereo_buffer) {
-    usbError("Failed to allocate stereo temp buffer!");
     return;
   }
-  usbLogf("Stereo temp buffer: %d bytes", SIGNAL_SAMPLES * 2 * sizeof(int16_t));
   
   // Выделяем буфер для фрагмента
   stereo_buffer_fragment = (int16_t*)malloc(FRAGMENT_SAMPLES * sizeof(int16_t));
   if (!stereo_buffer_fragment) {
-    usbError("Failed to allocate fragment buffer!");
     return;
   }
-  usbLogf("Fragment buffer: %d samples (%d ms), %d bytes", 
-          FRAGMENT_SAMPLES, FRAGMENT_SIZE_MS, FRAGMENT_SAMPLES * sizeof(int16_t));
   
   // Сбрасываем позицию в начале
   stereo_buffer_pos = 0;
@@ -139,22 +129,18 @@ void initDAC() {
   i2s_set_clk(I2S_NUM, SAMPLE_RATE, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_STEREO);
 
   int total_dma_samples = DMA_BUFFER_COUNT * DMA_BUFFER_LEN;
-  usbLogf("I2S initialized. DMA ring buffer: %d samples (%.1f sec)", 
-          total_dma_samples, (float)total_dma_samples / SAMPLE_RATE);
   
   // Заполняем stereo_buffer из signal_buffer
   fillStereoBuffer();
   
   // Предзаполняем DMA буферы
   prefillDMABuffers();
-  
-  usbLog("I2S DAC: Ready!");
+
 }
 
 // Установить новый сигнал для DAC (замена текущего буфера)
 void setSignalBuffer(int16_t* new_buffer, int num_samples) {
   if (new_buffer == NULL || num_samples != SIGNAL_SAMPLES) {
-    usbError("setSignalBuffer: Invalid buffer or size mismatch!");
     return;
   }
   
@@ -173,28 +159,10 @@ void setSignalBuffer(int16_t* new_buffer, int num_samples) {
   
   // Обновляем дисплей с новым пресетом
   refreshDisplay();
-  
-  usbLogf("Signal buffer updated: %d samples (MONO)", num_samples);
-}
-
-// Генерация демо-сигнала (синус 640 Гц) - для отладки
-void generateDemoSignal() {
-  float actual_freq = buildDemoPreset(signal_buffer,
-                                      SIGNAL_SAMPLES,
-                                      current_preset_name,
-                                      PRESET_NAME_MAX_LEN);
-  
-  usbLog("Demo signal generated!");
-  if (actual_freq > 0.0f) {
-    usbLogf("Preset: '%s' (%.2f Hz loop-aligned)", current_preset_name, actual_freq);
-  } else {
-    usbLogf("Preset: '%s'", current_preset_name);
-  }
 }
 
 // Предзаполнение DMA буферов
 void prefillDMABuffers() {
-  usbLog("Prefilling DMA buffers...");
   
   // Сбрасываем позицию
   stereo_buffer_pos = 0;
@@ -206,9 +174,6 @@ void prefillDMABuffers() {
   }
   
   dma_prefilled = fragments_written > 0;
-  usbLogf("DMA prefilled: %d fragments (~%.1f ms)", 
-          fragments_written,
-          fragments_written * (float)FRAGMENT_SIZE_MS);
   
   // Запускаем сбор ADC после небольшой задержки, чтобы исключить стартовые переходные процессы
   scheduleADCCaptureStart(ADC_CAPTURE_DELAY_MS);
@@ -220,67 +185,3 @@ bool keepDMAFilled() {
   return writeFragmentToDMA(pdMS_TO_TICKS(1));
 }
 
-// === GAIN CONTROL ===
-
-// Установить коэффициент усиления (gain) для правого канала
-void setDACGain(float gain) {
-  if (gain < MIN_GAIN) {
-    gain = MIN_GAIN;  // Ограничение снизу
-  }
-  
-  dac_gain = gain;
-  
-  // Пересобираем стерео-буфер с новым gain
-  fillStereoBuffer();
-  
-  // Позицию не сбрасываем - новый gain применится постепенно через фрагменты
-  // Это обеспечивает плавное изменение без щелчков
-  
-  // Обновляем дисплей с новым gain
-  refreshDisplay();
-  
-  usbLogf("DAC Gain set to %.2f", dac_gain);
-}
-
-// Получить текущий gain
-float getDACGain() {
-  return dac_gain;
-}
-
-// Построить гистограмму из пресета (signal_buffer)
-bool buildPresetHistogram(uint16_t* bins, uint8_t num_bins) {
-  if (bins == NULL || num_bins == 0 || signal_buffer == NULL) {
-    return false;
-  }
-  
-  // Инициализируем bins
-  for (uint8_t i = 0; i < num_bins; i++) {
-    bins[i] = 0;
-  }
-  
-  // Находим min/max для нормализации
-  int16_t min_val = 32767;
-  int16_t max_val = -32768;
-  
-  for (int i = 0; i < SIGNAL_SAMPLES; i++) {
-    if (signal_buffer[i] < min_val) min_val = signal_buffer[i];
-    if (signal_buffer[i] > max_val) max_val = signal_buffer[i];
-  }
-  
-  if (min_val == max_val) {
-    return false;
-  }
-  
-  // Строим гистограмму
-  float range = max_val - min_val;
-  for (int i = 0; i < SIGNAL_SAMPLES; i++) {
-    // Определяем в какой bin попадает значение
-    float normalized = (signal_buffer[i] - min_val) / range;
-    uint8_t bin_index = (uint8_t)(normalized * num_bins);
-    if (bin_index >= num_bins) bin_index = num_bins - 1;
-    
-    bins[bin_index]++;
-  }
-  
-  return true;
-}

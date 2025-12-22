@@ -1,6 +1,6 @@
 # tRNS
 ![](./pics/1_tRNS_DIY.jpg)
-
+© e-kolkhoz, Apache License 2.0
 
 Подробности схемы тут
 https://boosty.to/e-kolkhoz/posts/3848057d-d47d-4a71-9d24-98528d1f8744

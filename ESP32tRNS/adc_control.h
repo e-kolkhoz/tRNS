@@ -41,6 +41,13 @@ bool getADCPercentiles(float* p1_voltage, float* p99_voltage, float* mean_voltag
 // Возвращает true если есть валидные данные
 bool buildADCHistogram(uint16_t* bins, uint8_t num_bins);
 
+// Вычислить спектр для заданных частот (Goertzel algorithm)
+// magnitudes - выходной массив для амплитуд (размер num_freqs)
+// frequencies - массив частот для анализа (в Гц)
+// num_freqs - количество частот
+// Возвращает true если успешно
+bool computeADCSpectrum(float* magnitudes, const float* frequencies, uint8_t num_freqs);
+
 // Запланировать старт записи ADC после задержки (сбрасывает буфер)
 void scheduleADCCaptureStart(uint32_t delay_ms);
 

@@ -1,4 +1,5 @@
 #include "adc_control.h"
+#include <math.h>
 
 // Глобальные переменные
 adc_continuous_handle_t adc_handle = NULL;
@@ -425,5 +426,78 @@ void scheduleADCCaptureStart(uint32_t delay_ms) {
   adc_capture_enabled = false;
   adc_capture_pending = true;
   adc_capture_resume_ms = millis() + delay_ms;
+}
+
+// Алгоритм Goertzel для вычисления амплитуды на заданной частоте
+// Возвращает квадрат амплитуды (magnitude^2)
+static float goertzel(const int16_t* samples, uint32_t n_samples, float target_freq, float sample_rate) {
+  // Вычисляем коэффициент
+  float k = (n_samples * target_freq) / sample_rate;
+  float omega = (2.0f * PI * k) / n_samples;  // Arduino предоставляет PI
+  float coeff = 2.0f * cosf(omega);
+  
+  // Инициализация
+  float q0 = 0.0f;
+  float q1 = 0.0f;
+  float q2 = 0.0f;
+  
+  // Проход по всем сэмплам
+  for (uint32_t i = 0; i < n_samples; i++) {
+    q0 = coeff * q1 - q2 + (float)samples[i];
+    q2 = q1;
+    q1 = q0;
+  }
+  
+  // Вычисление магнитуды^2
+  float real = q1 - q2 * cosf(omega);
+  float imag = q2 * sinf(omega);
+  return real * real + imag * imag;
+}
+
+// Вычислить спектр для заданных частот (Goertzel algorithm)
+// magnitudes - выходной массив для амплитуд (размер num_freqs)
+// frequencies - массив частот для анализа (в Гц)
+// num_freqs - количество частот
+// Возвращает true если успешно
+bool computeADCSpectrum(float* magnitudes, const float* frequencies, uint8_t num_freqs) {
+  if (magnitudes == NULL || frequencies == NULL || num_freqs == 0) {
+    return false;
+  }
+  
+  // Собираем последние сэмплы из кольцевого буфера
+  uint32_t window = getStatsWindowSize();
+  int16_t* temp_buffer = (int16_t*)malloc(window * sizeof(int16_t));
+  if (temp_buffer == NULL) {
+    return false;
+  }
+  
+  uint32_t valid_count = collectRecentSamples(temp_buffer, window);
+  if (valid_count < 100) {  // Минимум 100 сэмплов для анализа
+    free(temp_buffer);
+    for (uint8_t i = 0; i < num_freqs; i++) {
+      magnitudes[i] = 0.0f;
+    }
+    return false;
+  }
+  
+  // Удаляем DC смещение (важно для точности)
+  float mean = 0.0f;
+  for (uint32_t i = 0; i < valid_count; i++) {
+    mean += temp_buffer[i];
+  }
+  mean /= valid_count;
+  for (uint32_t i = 0; i < valid_count; i++) {
+    temp_buffer[i] -= (int16_t)mean;
+  }
+  
+  // Вычисляем магнитуду для каждой частоты
+  for (uint8_t i = 0; i < num_freqs; i++) {
+    float mag_squared = goertzel(temp_buffer, valid_count, frequencies[i], ADC_SAMPLE_RATE);
+    // Нормализация: делим на количество сэмплов в квадрате
+    magnitudes[i] = sqrtf(mag_squared) / valid_count;
+  }
+  
+  free(temp_buffer);
+  return true;
 }
 

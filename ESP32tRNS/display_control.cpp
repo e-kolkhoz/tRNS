@@ -3,6 +3,7 @@
 #include "adc_control.h"
 #include <Wire.h>
 #include <U8g2lib.h>
+#include <math.h>
 
 // Инициализация U8g2 для OLED 128x64 (SSD1306 или SH1106)
 // Используем HW I2C (Wire) на пинах GPIO7 (SDA) и GPIO9 (SCL)
@@ -131,41 +132,72 @@ void refreshDisplay() {
     u8g2.drawStr(0, 28, "ADC: waiting...");
   }
   
-  // === СТРОКИ 3-6: Гистограмму ADC ===
-  const uint8_t NUM_BINS = 15;  // 16 столбцов для гистограммы
-  uint16_t adc_bins[NUM_BINS];
-  bool adc_hist_ok = buildADCHistogram(adc_bins, NUM_BINS);
+  // === СТРОКИ 3-6: Гистограмма (слева) + Спектр (справа) ===
+  const uint8_t VISUAL_Y_START = 26;     // Y начало визуализации
+  const uint8_t VISUAL_HEIGHT = 38;      // Высота области (64 - 26 = 38 пикселей)
+  
+  // --- Гистограмма (узкая, слева) ---
+  const uint8_t HIST_NUM_BINS = 8;       // Меньше столбцов для экономии места
+  const uint8_t HIST_WIDTH = 40;         // Ширина области гистограммы
+  const uint8_t HIST_BIN_WIDTH = 4;      // Ширина столбца
+  const uint8_t HIST_SPACING = 1;        // Отступ между столбцами
+  
+  uint16_t adc_bins[HIST_NUM_BINS];
+  bool adc_hist_ok = buildADCHistogram(adc_bins, HIST_NUM_BINS);
   
   if (adc_hist_ok) {
-    // Находим максимальное значение для нормализации высоты столбцов
-    uint16_t max_adc = 0;
-    for (uint8_t i = 0; i < NUM_BINS; i++) {
-
-      if (adc_bins[i] > max_adc) max_adc = adc_bins[i];
+    uint16_t max_bin = 1;
+    for (uint8_t i = 0; i < HIST_NUM_BINS; i++) {
+      if (adc_bins[i] > max_bin) max_bin = adc_bins[i];
     }
     
-    if (max_adc == 0) max_adc = 1;  // Защита от деления на ноль
-    
-    // Высота области для гистограмм: 64 - 24 = 40 пикселей
-    // Делим пополам: по 20 пикселей на каждую гистограмму
-    const uint8_t HIST_HEIGHT = 18;  // Высота столбцов гистограммы
-    //const uint8_t HIST_Y_PRESET = 26;  // Y координата для пресета
-    const uint8_t HIST_Y_ADC = 26;     // Y координата для ADC
-    const uint8_t BIN_WIDTH = 7;        // Ширина столбца (128 / 15 = 8, но с отступами 7)
-    const uint8_t BIN_SPACING = 1;      // Отступ между столбцами
-    
-    
-    // Рисуем гистограмму ADC
-    for (uint8_t i = 0; i < NUM_BINS; i++) {
-      uint8_t x = i * (BIN_WIDTH + BIN_SPACING) + 4;
-      uint8_t height = (adc_bins[i] * HIST_HEIGHT) / max_adc;
+    for (uint8_t i = 0; i < HIST_NUM_BINS; i++) {
+      uint8_t x = i * (HIST_BIN_WIDTH + HIST_SPACING);
+      uint8_t height = (adc_bins[i] * VISUAL_HEIGHT) / max_bin;
       if (height > 0) {
-        u8g2.drawBox(x, HIST_Y_ADC + HIST_HEIGHT - height, BIN_WIDTH, height);
+        u8g2.drawBox(x, VISUAL_Y_START + VISUAL_HEIGHT - height, HIST_BIN_WIDTH, height);
       }
     }
-  } else {
+  }
+  
+  // --- Спектр (винтажный стиль, справа) ---
+  const uint8_t SPEC_X_START = HIST_WIDTH + 2;  // Начало спектра (после гистограммы)
+  const uint8_t SPEC_WIDTH = 128 - SPEC_X_START; // Оставшаяся ширина
+  const uint8_t SPEC_NUM_BANDS = SPECTRUM_NUM_BANDS;
+  const uint8_t SPEC_BAR_WIDTH = (SPEC_WIDTH - SPEC_NUM_BANDS) / SPEC_NUM_BANDS;
+  const uint8_t SPEC_SPACING = 1;
+  
+  float spectrum_mags[SPEC_NUM_BANDS];
+  bool spectrum_ok = computeADCSpectrum(spectrum_mags, SPECTRUM_FREQUENCIES, SPEC_NUM_BANDS);
+  
+  if (spectrum_ok) {
+    // Находим максимум для нормализации (логарифмическая шкала)
+    float max_mag = 0.0001f;  // Минимальное значение для защиты
+    for (uint8_t i = 0; i < SPEC_NUM_BANDS; i++) {
+      if (spectrum_mags[i] > max_mag) max_mag = spectrum_mags[i];
+    }
+    
+    // Рисуем столбцы спектра
+    for (uint8_t i = 0; i < SPEC_NUM_BANDS; i++) {
+      uint8_t x = SPEC_X_START + i * (SPEC_BAR_WIDTH + SPEC_SPACING);
+      // Логарифмическая шкала для лучшей читаемости
+      float normalized = spectrum_mags[i] / max_mag;
+      if (normalized > 0.001f) {
+        normalized = logf(normalized * 100.0f + 1.0f) / logf(101.0f);
+      }
+      uint8_t height = (uint8_t)(normalized * VISUAL_HEIGHT);
+      if (height > VISUAL_HEIGHT) height = VISUAL_HEIGHT;
+      
+      if (height > 0) {
+        u8g2.drawBox(x, VISUAL_Y_START + VISUAL_HEIGHT - height, SPEC_BAR_WIDTH, height);
+      }
+    }
+  }
+  
+  // Если данных нет
+  if (!adc_hist_ok && !spectrum_ok) {
     u8g2.setFont(u8g2_font_6x10_tf);
-    u8g2.drawStr(0, 30, "Histograms: waiting...");
+    u8g2.drawStr(0, 30, "Waiting data...");
   }  
   u8g2.sendBuffer();
 }

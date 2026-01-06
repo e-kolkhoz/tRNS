@@ -51,3 +51,6 @@
 
 Личка для вопросов по сборке, идеям:
 [https://t.me/ekolkhoz](https://t.me/ekolkhoz)
+
+[![Boosty](https://img.shields.io/badge/boosty-support-orange)](https://boosty.to/e-kolkhoz)
+[![Telegram](https://img.shields.io/badge/telegram-channel-blue)](https://t.me/e_kolkhoz)

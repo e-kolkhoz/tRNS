@@ -4,16 +4,13 @@
 #include <math.h>
 
 // Глобальные переменные
-int16_t* signal_buffer = NULL;  // МОНО буфер (только правый канал)
+int16_t* signal_buffer = NULL;  // МОНО знаковый буфер (исходный сигнал)
 bool dma_prefilled = false;
 char current_preset_name[PRESET_NAME_MAX_LEN] = "No preset loaded";
 float dac_gain = DEFAULT_GAIN;  // Коэффициент усиления (по умолчанию 1.0)
 
-// Константа для левого канала (вычисляется один раз)
-static int16_t LEFT_CHANNEL_CONST = 0;
-
 // Временный стерео-буфер для отправки в I2S DMA
-// Формируется на лету из МОНО signal_buffer + LEFT_CHANNEL_CONST
+// Формируется из МОНО signal_buffer → СТЕРЕО [sign, magnitude]
 static int16_t* stereo_buffer = NULL;
 static const uint32_t STEREO_BUFFER_SIZE = SIGNAL_SAMPLES * 2;
 
@@ -24,22 +21,37 @@ static uint32_t stereo_buffer_pos = 0;
 static int16_t* stereo_buffer_fragment = NULL;
 
 // Заполнить стерео-буфер из МОНО: [L_CONST, R*gain, L_CONST, R*gain, ...]
-// С применением gain и насыщением для int16
+// Формирование sign-magnitude стерео для H-моста
+// Левый канал = знак (32767=положительный, 0=отрицательный)
+// Правый канал = модуль с gain и насыщением
 static void fillStereoBuffer() {
   for (int i = 0; i < SIGNAL_SAMPLES; i++) {
-    stereo_buffer[i * 2] = LEFT_CHANNEL_CONST;  // Левый: константа
-    
-    // Правый: сигнал с gain и насыщением
+    // Применяем gain к исходному сигналу
     float sample_with_gain = signal_buffer[i] * dac_gain;
     
-    // Насыщение (clamping) для int16: [-32768, 32767]
-    if (sample_with_gain > 32767.0f) {
-      stereo_buffer[i * 2 + 1] = 32767;
-    } else if (sample_with_gain < -32768.0f) {
-      stereo_buffer[i * 2 + 1] = -32768;
+    // Определяем знак и модуль
+    bool is_positive = (sample_with_gain >= 0.0f);
+    
+    // Применяем инверсию полярности (если электроды перепутаны)
+    #if POLARITY_INVERT
+      is_positive = !is_positive;
+    #endif
+    
+    float magnitude = fabsf(sample_with_gain);
+    
+    // Насыщение модуля для int16: [0, 32767] (униполярный DAC!)
+    int16_t mag_saturated;
+    if (magnitude > 32767.0f) {
+      mag_saturated = 32767;
     } else {
-      stereo_buffer[i * 2 + 1] = (int16_t)sample_with_gain;
+      mag_saturated = (int16_t)magnitude;
     }
+    
+    // Левый канал = знак
+    stereo_buffer[i * 2] = is_positive ? DAC_SIGN_POSITIVE : DAC_SIGN_NEGATIVE;
+    
+    // Правый канал = модуль (всегда >= 0)
+    stereo_buffer[i * 2 + 1] = mag_saturated;
   }
 }
 
@@ -83,10 +95,6 @@ static bool writeFragmentToDMA(TickType_t timeout_ticks) {
 
 // Инициализация I2S и DMA для DAC
 void initDAC() {
-  
-  // Вычисляем константу для левого канала (смещение ADC)
-  LEFT_CHANNEL_CONST = (int16_t)(MAX_VAL * DAC_LEFT_OFFSET_VOLTS / MAX_VOLT);
-  
   // Выделяем временный стерео-буфер для I2S DMA
   stereo_buffer = (int16_t*)malloc(SIGNAL_SAMPLES * 2 * sizeof(int16_t));
   if (!stereo_buffer) {

@@ -22,6 +22,9 @@ void setDisplayStatus(const char* status);
 // Принудительное обновление дисплея (для критичных изменений)
 void refreshDisplay();
 
+// Рендеринг текущего экрана (из menu_control)
+void renderCurrentScreen();
+
 // Сбросить таймер отображения (отсчёт времени на экране)
 void resetDisplayTimer();
 

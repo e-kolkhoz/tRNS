@@ -23,6 +23,9 @@
 #include "adc_control.h"
 #include "display_control.h"
 #include "preset_storage.h"
+#include "encoder_control.h"
+#include "session_control.h"
+#include "menu_control.h"
 
 // ============================================================================
 // === SETUP ===
@@ -80,14 +83,22 @@ void setup() {
   // Шаг 6: Инициализация I2S DAC
   showBootScreen("Init DAC DMA...");
   initDAC();
+  
+  // Шаг 7: Инициализация энкодера
+  showBootScreen("Init Encoder...");
+  initEncoder();
+  
+  // Шаг 8: Инициализация системы сеансов и меню
+  showBootScreen("Init Session...");
+  initSession();
+  initMenu();
 
   // Финальный экран
   showBootScreen("Starting...");
   delay(500);
   
-  // Переключаемся на нормальный интерфейс
-  setDisplayStatus("Ready");
-  refreshDisplay();
+  // Переключаемся на дашборд
+  renderCurrentScreen();
 }
 
 // ============================================================================
@@ -107,7 +118,20 @@ void loop() {
   // 2. Читаем данные из ADC DMA и складываем в кольцевой буфер
   readADCFromDMA();
 
-  // 3. Обновляем OLED дисплей (неблокирующе, с ограничением частоты)
+  // 3. Обновление состояния сеанса (fadein/stable/fadeout)
+  updateSession();
+  
+  // Проверка автозавершения сеанса
+  if (isSessionJustFinished() && current_screen == SCR_DASHBOARD) {
+    // Сеанс завершился автоматически → показываем SCR_FINISH
+    stack_depth = 0;
+    screen_stack[0] = SCR_FINISH;
+  }
+
+  // 4. Опрос энкодера (вызывает handleRotate/handleClick)
+  updateEncoder();
+
+  // 5. Обновляем OLED дисплей (неблокирующе, с ограничением частоты)
   updateDisplay();
 
   // Минимальная задержка

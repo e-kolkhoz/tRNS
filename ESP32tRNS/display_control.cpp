@@ -1,8 +1,11 @@
 #include "display_control.h"
 #include "dac_control.h"
 #include "adc_control.h"
+#include "menu_control.h"
+#include "session_control.h"
 #include <Wire.h>
 #include <U8g2lib.h>
+#include <math.h>
 
 // Инициализация U8g2 для OLED 128x64 (SSD1306 или SH1106)
 // Используем HW I2C (Wire) на пинах GPIO7 (SDA) и GPIO9 (SCL)
@@ -23,7 +26,8 @@ void initDisplay() {
   
   // Инициализация дисплея
   u8g2.begin();
-  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.enableUTF8Print();  // ВАЖНО! Включаем UTF-8 для кириллицы
+  u8g2.setFont(u8g2_font_6x12_t_cyrillic);
   u8g2.setFontRefHeightExtendedText();
   u8g2.setDrawColor(1);
   u8g2.setFontPosTop();
@@ -32,9 +36,9 @@ void initDisplay() {
   
   // Приветственный экран
   u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_9x15B_tf);
+  u8g2.setFont(u8g2_font_9x15_t_cyrillic);
   u8g2.drawStr(10, 10, "tRNS/tACS");
-  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.setFont(u8g2_font_6x12_t_cyrillic);
   u8g2.drawStr(20, 35, "Booting...");
   u8g2.sendBuffer();
 }
@@ -42,9 +46,9 @@ void initDisplay() {
 // Показать экран загрузки с шагом инициализации
 void showBootScreen(const char* step) {
   u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_7x14B_tf);
-  u8g2.drawStr(0, 0, "tRNS/tACS");
-  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.setFont(u8g2_font_7x13_t_cyrillic);
+  u8g2.drawStr(0, 0, "tRNS/tACS/tDCS");
+  u8g2.setFont(u8g2_font_6x12_t_cyrillic);
   
   // Рисуем шаг инициализации
   u8g2.drawStr(0, 20, step);
@@ -71,7 +75,7 @@ void updateDisplay() {
   }
   last_display_update = now;
   
-  refreshDisplay();
+  renderCurrentScreen();  // Рендерим текущий экран
 }
 
 // Принудительное обновление дисплея
@@ -79,7 +83,7 @@ void refreshDisplay() {
   u8g2.clearBuffer();
   
   // === СТРОКА 1: Название пресета ===
-  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.setFont(u8g2_font_6x12_t_cyrillic);
   
   // Название пресета (обрезаем если длинное)
   char preset_display[24];
@@ -98,7 +102,7 @@ void refreshDisplay() {
   u8g2.drawStr(0, 0, preset_display);
 
   // === СТРОКА 2: Таймер MM:SS (крупный шрифт) ===
-  u8g2.setFont(u8g2_font_7x14_tf);
+  u8g2.setFont(u8g2_font_7x13_t_cyrillic);
   uint32_t elapsed_sec = (millis() - timer_start_ms) / 1000;
   uint16_t minutes_total = elapsed_sec / 60;
   uint8_t seconds = elapsed_sec % 60;
@@ -111,7 +115,7 @@ void refreshDisplay() {
   u8g2.drawStr(0, 14, timer_str);
   
   // Возвращаем основной шрифт для остального текста
-  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.setFont(u8g2_font_6x12_t_cyrillic);
   
   // === СТРОКА 2: Перцентили и среднее ADC ===
   float p1_v = 0.0f, p99_v = 0.0f, mean_v = 0.0f;
@@ -119,13 +123,14 @@ void refreshDisplay() {
   
   if (adc_valid) {
     char stats_str[32];
-    float p1_mA = (p1_v - ADC_CENTER_V) * ADC_V_TO_MA;
-    float mean_mA = (mean_v - ADC_CENTER_V) * ADC_V_TO_MA;
-    float p99_mA = (p99_v - ADC_CENTER_V) * ADC_V_TO_MA;
+    // Напряжения уже знаковые (sign-magnitude реконструкция)
+    float p1_mA = p1_v * ADC_V_TO_MA;
+    float mean_mA = mean_v * ADC_V_TO_MA;
+    float p99_mA = p99_v * ADC_V_TO_MA;
     
 
     snprintf(stats_str, sizeof(stats_str), "%.1f > %.1f < %.1f", p1_mA, mean_mA, p99_mA);
-    u8g2.setFont(u8g2_font_7x14_tf);
+    u8g2.setFont(u8g2_font_7x13_t_cyrillic);
     u8g2.drawStr(0, 50, stats_str);
   } else {
     u8g2.drawStr(0, 28, "ADC: waiting...");
@@ -164,10 +169,151 @@ void refreshDisplay() {
       }
     }
   } else {
-    u8g2.setFont(u8g2_font_6x10_tf);
+    u8g2.setFont(u8g2_font_6x12_t_cyrillic);
     u8g2.drawStr(0, 30, "Histograms: waiting...");
-  }  
+  }
+  
   u8g2.sendBuffer();
+}
+
+// === РЕНДЕРИНГ ЭКРАНОВ МЕНЮ ===
+void renderMenu(const char* title, const char* choices[], uint8_t num_choices, uint8_t selected) {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x12_t_cyrillic);
+  
+  // Заголовок
+  u8g2.setCursor(0, 0);
+  u8g2.print(title);
+  u8g2.drawLine(0, 11, 128, 11);
+  
+  // Опции
+  for (uint8_t i = 0; i < num_choices; i++) {
+    uint8_t y = 15 + i * 10;
+    if (i == selected) {
+      u8g2.setCursor(0, y);
+      u8g2.print(">");
+    }
+    u8g2.setCursor(10, y);
+    u8g2.print(choices[i]);
+  }
+  
+  u8g2.sendBuffer();
+}
+
+void renderEditor() {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x12_t_cyrillic);
+  
+  // Название параметра
+  u8g2.setCursor(0, 0);
+  u8g2.print(editor_data.name);
+  u8g2.drawLine(0, 11, 128, 11);
+  
+  // Значение (крупным шрифтом) - показываем ВРЕМЕННОЕ значение!
+  u8g2.setFont(u8g2_font_9x15_t_cyrillic);
+  char value_str[16];
+  if (editor_data.is_int) {
+    snprintf(value_str, sizeof(value_str), "%d", (int)editor_temp_value);
+  } else {
+    snprintf(value_str, sizeof(value_str), "%.1f", editor_temp_value);
+  }
+  u8g2.drawStr(30, 30, value_str);
+  
+  u8g2.sendBuffer();
+}
+
+void renderConfirm() {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x12_t_cyrillic);
+  
+  u8g2.setCursor(0, 0);
+  u8g2.print("Остановить сеанс?");
+  u8g2.drawLine(0, 11, 128, 11);
+  
+  if (menu_selected == 0) {
+    u8g2.setCursor(0, 25);
+    u8g2.print("> Нет, продолжить");
+    u8g2.setCursor(0, 40);
+    u8g2.print("  Да, остановить");
+  } else {
+    u8g2.setCursor(0, 25);
+    u8g2.print("  Нет, продолжить");
+    u8g2.setCursor(0, 40);
+    u8g2.print("> Да, остановить");
+  }
+  
+  u8g2.sendBuffer();
+}
+
+// === ГЛАВНАЯ ФУНКЦИЯ РЕНДЕРИНГА ===
+void renderCurrentScreen() {
+  switch (current_screen) {
+    case SCR_DASHBOARD:
+      refreshDisplay();  // Используем старый dashboard
+      break;
+      
+    case SCR_MAIN_MENU:
+      {
+        const char* choices[] = { "tRNS", "tDCS", "tACS" };
+        renderMenu("Выбор режима", choices, 3, menu_selected);
+      }
+      break;
+      
+    case SCR_TRNS_MENU:
+      {
+        const char* choices[] = { "СТАРТ", "Амплитуда", "Длительность", "Назад" };
+        renderMenu("tRNS", choices, 4, menu_selected);
+      }
+      break;
+      
+    case SCR_TDCS_MENU:
+      {
+        const char* choices[] = { "СТАРТ", "Макс. ток", "Длительность", "Назад" };
+        renderMenu("tDCS", choices, 4, menu_selected);
+      }
+      break;
+      
+    case SCR_TACS_MENU:
+      {
+        const char* choices[] = { "СТАРТ", "Амплитуда", "Частота", "Длительность", "Назад" };
+        renderMenu("tACS", choices, 5, menu_selected);
+      }
+      break;
+      
+    case SCR_EDITOR:
+      renderEditor();
+      break;
+      
+    case SCR_CONFIRM:
+      renderConfirm();
+      break;
+      
+    case SCR_FINISH:
+      {
+        u8g2.clearBuffer();
+        u8g2.setFont(u8g2_font_7x13_t_cyrillic);
+        u8g2.setCursor(0, 0);
+        u8g2.print("СЕАНС ЗАВЕРШЕН");
+
+        
+        u8g2.setFont(u8g2_font_6x12_t_cyrillic);
+        char info_str[32];
+        snprintf(info_str, sizeof(info_str), "%s", getModeName(current_settings.mode));
+        u8g2.setCursor(10, 35);
+        u8g2.print(info_str);
+        
+        // Показываем фактическое время сеанса в формате MM:SS
+        extern uint32_t session_elapsed_sec;
+        uint32_t mins = session_elapsed_sec / 60;
+        uint32_t secs = session_elapsed_sec % 60;
+        snprintf(info_str, sizeof(info_str), "%.1fmA %u:%02u", 
+                 current_settings.amplitude_mA, mins, secs);
+        u8g2.setCursor(10, 47);
+        u8g2.print(info_str);
+        u8g2.sendBuffer();
+      }
+      break;
+  }
 }
 
 // Установить статус устройства

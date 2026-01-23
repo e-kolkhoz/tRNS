@@ -25,9 +25,6 @@ void refreshDisplay();
 // Рендеринг текущего экрана (из menu_control)
 void renderCurrentScreen();
 
-// Сбросить таймер отображения (отсчёт времени на экране)
-void resetDisplayTimer();
-
 // Показать экран загрузки с шагом инициализации
 void showBootScreen(const char* step);
 

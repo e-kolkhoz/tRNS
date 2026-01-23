@@ -13,7 +13,7 @@
 // ВАЖНО: Храним МОНО знаковый сигнал, преобразуем в СТЕРЕО sign-magnitude для H-моста
 // Правый канал = модуль (abs), Левый канал = знак (32767=pos, 0=neg)
 #define SIGNAL_SAMPLES      16384  // Ровно 2^14 для FFT без растекания спектра
-#define LOOP_DURATION_SEC   ((float)SIGNAL_SAMPLES / SAMPLE_RATE)  // 2.048 сек
+#define DEF_LOOP_DURATION_SEC   ((float)SIGNAL_SAMPLES / SAMPLE_RATE)  // 2.048 сек
 
 // === I2S DMA CONFIG (для DAC - PCM5102A) ===
 #define I2S_NUM             I2S_NUM_0
@@ -53,26 +53,30 @@
 
 // === ADC DMA CONFIG ===
 // Sign-magnitude ADC: 2 канала синхронно (знак + модуль)
-// Для tRNS (100-640 Hz) достаточно 20 kHz
-#define ADC_SAMPLE_RATE      20000   // Частота семплирования (20 kHz - оптимально)
+// Для tRNS (100-640 Hz) достаточно 10 kHz
+#define ADC_SAMPLE_RATE      8000   // Частота семплирования (8000 kHz - оптимально)
 #define ADC_FRAME_SIZE       512     // Размер фрейма DMA (×2 канала = 1024 сэмпла)
 #define ADC_DMA_BUF_COUNT    4       // Количество DMA буферов
-#define ADC_READ_TIMEOUT_MS  100     // Timeout для чтения
+#define ADC_READ_TIMEOUT_MS  10      // Небольшой timeout для ADC
 
-// Аттенюатор ADC (настраиваемый для разных этапов тестирования)
-// ADC_ATTEN_DB_0:   0-1.1V   (боевой режим с делителем)
-// ADC_ATTEN_DB_11:  0-3.3V   (тестирование напрямую с DAC)
-#define ADC_ATTEN            ADC_ATTEN_DB_11  // Меняй на DB_0 для боевого режима
-#define ADC_MAX_VOLTAGE      ((ADC_ATTEN == ADC_ATTEN_DB_0) ? 1.1f : 3.3f)
+// Битность ADC: ESP32-S2 continuous mode поддерживает только 12-bit
+// (10/11-bit вызывает crash, нелинейность на краях — известная проблема ESP32)
+#define ADC_BITWIDTH         SOC_ADC_DIGI_MAX_BITWIDTH  // 12-bit
+#define ADC_MAX_VALUE        4095  // 12-bit = 0..4095
 
-// Конвертация ADC кодов в напряжение и ток
-#define ADC_V_TO_MA          10.0f   // Множитель для получения тока в mA
-#define ADC_CAPTURE_DELAY_MS 200     // Задержка запуска записи ADC после старта DAC (мс)
-#define ADC_STATS_WINDOW_MS  200     // Окно статистики/гистограммы для ADC (мс)
+// Аттенюатор ADC
+// ЗНАК (SIGN) всегда читаем в диапазоне 0-3.3V
+// МОДУЛЬ (MOD) настраиваем: 0-1.1V (боевой) или 0-3.3V (тестовый)
+#define ADC_MOD_ATTEN        ADC_ATTEN_DB_11  // Меняй на DB_0 для боевого режима
+#define ADC_MAX_VOLTAGE      ((ADC_MOD_ATTEN == ADC_ATTEN_DB_0) ? 1.1f : 3.3f)
+
+// Конвертация ADC кодов в напряжение и ток (коэффициент ADC_V_TO_MA теперь в SessionSettings)
+#define ADC_CAPTURE_DELAY_MS 300     // Задержка запуска записи ADC после старта DAC (мс)
+#define ADC_STATS_WINDOW_MS  200      // Окно статистики/гистограммы для ADC (мс)
 #define ADC_STATS_WINDOW_SAMPLES ((ADC_STATS_WINDOW_MS * ADC_SAMPLE_RATE) / 1000)
 
 // Порог детектирования знака (если sign > этого, то положительный)
-#define ADC_SIGN_THRESHOLD   2048    // Середина диапазона 12-bit ADC
+#define ADC_SIGN_THRESHOLD   2048  // Середина диапазона 12-bit (4096/2)
 
 // Кольцевой буфер для накопления данных
 // ВАЖНО: Буфер согласован с DAC лупом (2.048 сек)! 
@@ -96,10 +100,48 @@
 // Максимальная длина имени пресета
 #define PRESET_NAME_MAX_LEN     128
 
-// === GAIN CONTROL ===
-#define DEFAULT_GAIN            0.375f  // 0.714f // Коэффициент усиления по умолчанию (без изменений)
-#define MIN_GAIN                0.0f    // Минимальный gain (полное подавление)
-// Максимальный gain не ограничен (защита через насыщение int16)
+// === FADE-IN / FADE-OUT ПАРАМЕТРЫ ===
+#define DEF_FADE_DURATION_SEC   10.0f   // Длительность fadein и fadeout (секунды) по умолчанию
+
+// === ДЕФОЛТНЫЕ НАСТРОЙКИ РЕЖИМОВ ===
+#define DEF_AMPLITUDE_MA        1.0f    // Амплитуда по умолчанию для всех режимов (мА)
+#define DEF_DURATION_MIN        20      // Длительность сеанса по умолчанию (минуты)
+#define DEF_TACS_FREQUENCY_HZ   140.0f  // Частота tACS по умолчанию (Гц)
+
+// === ДЕФОЛТНЫЕ КАЛИБРОВОЧНЫЕ КОЭФФИЦИЕНТЫ ===
+#define DEF_ADC_V_TO_MA         0.8f   // ADC: вольты → мА
+#define DEF_DAC_CODE_TO_MA      11000.0f  // DAC: коды/мА (1В=1мА, ~10000 кодов)
+
+// === ПРЕДЕЛЫ НАСТРОЙКИ ПАРАМЕТРОВ (для редактора) ===
+// Амплитуда (мА)
+#define MIN_AMPLITUDE_MA        0.1f
+#define MAX_AMPLITUDE_MA        2.0f
+#define AMPLITUDE_INCREMENT_MA  0.1f
+
+// Частота tACS (Гц)
+#define MIN_TACS_FREQ_HZ        0.5f
+#define MAX_TACS_FREQ_HZ        640.0f
+#define TACS_FREQ_INCREMENT_HZ  1.0f
+
+// Длительность сеанса (минуты)
+#define MIN_DURATION_MIN        1.0f
+#define MAX_DURATION_MIN        60.0f
+#define DURATION_INCREMENT_MIN  1.0f
+
+// Калибровка ADC
+#define MIN_ADC_V_TO_MA         0.1f
+#define MAX_ADC_V_TO_MA         100.0f
+#define ADC_V_TO_MA_INCREMENT   0.1f
+
+// Калибровка DAC (коды/мА)
+#define MIN_DAC_CODE_TO_MA      1000.0f
+#define MAX_DAC_CODE_TO_MA      40000.0f
+#define DAC_CODE_TO_MA_INCREMENT 100.0f
+
+// Длительность fadein/fadeout (секунды)
+#define MIN_FADE_DURATION_SEC   1.0f
+#define MAX_FADE_DURATION_SEC   60.0f
+#define FADE_DURATION_INCREMENT 1.0f
 
 #endif // CONFIG_H
 

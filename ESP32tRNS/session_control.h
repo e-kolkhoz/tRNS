@@ -25,16 +25,28 @@ enum SessionState {
 
 // === НАСТРОЙКИ РЕЖИМОВ ===
 struct SessionSettings {
-  StimMode mode;              // Текущий режим
-  float amplitude_mA;         // Амплитуда тока в мА (для всех режимов)
-  uint16_t duration_min;      // Продолжительность в минутах
-  float frequency_Hz;         // Частота для tACS (игнорируется для tRNS/tDCS)
+  StimMode mode;                   // Текущий режим
+  
+  // Настройки режимов
+  float amplitude_tDCS_mA;         // Амплитуда тока в мА
+  uint16_t duration_tDCS_min;      // Продолжительность в минутах
+  float amplitude_tRNS_mA;         // Амплитуда тока в мА
+  uint16_t duration_tRNS_min;      // Продолжительность в минутах
+  float amplitude_tACS_mA;         // Амплитуда тока в мА
+  uint16_t duration_tACS_min;      // Продолжительность в минутах
+  float frequency_tACS_Hz;         // Частота для tACS 
+  
+  // Общие настройки (калибровка)
+  float adc_v_to_mA;               // ADC: вольты → мА (по умолчанию 10.0)
+  float dac_code_to_mA;            // DAC: код → мА (по умолчанию 0.375)
+  float fade_duration_sec;         // Длительность fadein/fadeout (секунды)
 };
 
 // === ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ===
 extern SessionSettings current_settings;  // Текущие настройки
 extern SessionState current_state;        // Текущее состояние сеанса
 extern uint32_t session_elapsed_sec;      // Фактическое время сеанса (секунды)
+extern uint32_t session_timer_start_ms;   // Время старта сеанса для отображения таймера
 
 // === ФУНКЦИИ ===
 
@@ -46,6 +58,9 @@ void loadSettings();
 
 // Сохранить текущие настройки в EEPROM
 void saveSettings();
+
+// Сбросить настройки на заводские
+void resetToDefaults();
 
 // Сгенерировать сигнал для текущего режима
 // Заполняет signal_buffer согласно режиму и настройкам

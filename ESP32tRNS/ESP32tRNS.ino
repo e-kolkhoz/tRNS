@@ -48,10 +48,12 @@ void setup() {
   // ============================================================
   
   // Шаг 1: Инициализация OLED (первым делом, чтобы показывать прогресс)
+  Serial.println("[BOOT] initDisplay()");
   initDisplay();
   
   // Шаг 2: Выделение памяти под ADC буфер
   showBootScreen("Allocate ADC...");
+  Serial.println("[BOOT] allocate ADC ring buffer");
   adc_ring_buffer = (int16_t*)malloc(ADC_RING_SIZE * sizeof(int16_t));
   if (!adc_ring_buffer) {
     showBootScreen("ADC alloc FAIL!");
@@ -63,10 +65,12 @@ void setup() {
 
   // Шаг 3: Инициализация ADC DMA
   showBootScreen("Init ADC DMA...");
+  Serial.println("[BOOT] initADC()");
   initADC();
 
   // Шаг 4: Выделение памяти под DAC сигнал
   showBootScreen("Allocate DAC...");
+  Serial.println("[BOOT] allocate signal buffer");
   signal_buffer = (int16_t*)malloc(SIGNAL_SAMPLES * sizeof(int16_t));
   if (!signal_buffer) {
     showBootScreen("DAC alloc FAIL!");
@@ -74,6 +78,7 @@ void setup() {
   }
 
   // Шаг 5: Загрузка пресета из PROGMEM (обязательно!)
+  Serial.println("[BOOT] loadPresetFromFlash()");
   bool preset_loaded = loadPresetFromFlash(signal_buffer, current_preset_name, PRESET_NAME_MAX_LEN);
   if (!preset_loaded) {
     showBootScreen("ERROR: No preset!");
@@ -82,22 +87,31 @@ void setup() {
 
   // Шаг 6: Инициализация I2S DAC
   showBootScreen("Init DAC DMA...");
+  Serial.println("[BOOT] initDAC()");
   initDAC();
   
   // Шаг 7: Инициализация энкодера
   showBootScreen("Init Encoder...");
+  Serial.println("[BOOT] initEncoder()");
   initEncoder();
   
-  // Шаг 8: Инициализация системы сеансов и меню
-  showBootScreen("Init Session...");
+  // Шаг 8: Инициализация настроек и меню
+  showBootScreen("Init Settings...");
+  Serial.println("[BOOT] initSession()");
   initSession();
+  showBootScreen("Init Menu...");
+  Serial.println("[BOOT] initMenu()");
   initMenu();
+  // Гарантируем старт с главного меню
+  stack_depth = 0;
+  screen_stack[0] = SCR_MAIN_MENU;
 
   // Финальный экран
   showBootScreen("Starting...");
+  Serial.println("[BOOT] renderCurrentScreen()");
   delay(500);
   
-  // Переключаемся на дашборд
+  // Переключаемся на главный экран меню
   renderCurrentScreen();
 }
 
@@ -121,11 +135,12 @@ void loop() {
   // 3. Обновление состояния сеанса (fadein/stable/fadeout)
   updateSession();
   
-  // Проверка автозавершения сеанса
-  if (isSessionJustFinished() && current_screen == SCR_DASHBOARD) {
+  // Проверка автозавершения сеанса (независимо от текущего экрана)
+  if (isSessionJustFinished()) {
     // Сеанс завершился автоматически → показываем SCR_FINISH
     stack_depth = 0;
     screen_stack[0] = SCR_FINISH;
+    menu_selected = 0;
   }
 
   // 4. Опрос энкодера (вызывает handleRotate/handleClick)
@@ -133,7 +148,6 @@ void loop() {
 
   // 5. Обновляем OLED дисплей (неблокирующе, с ограничением частоты)
   updateDisplay();
-
-  // Минимальная задержка
-  delay(1);
+  
+  // БЕЗ DELAY - loop должен крутиться максимально быстро для отзывчивости!
 }

@@ -1,6 +1,12 @@
 #include "menu_control.h"
 #include "session_control.h"
 
+// === FORWARD DECLARATIONS ===
+void executeMainMenuChoice();
+void executeSessionMenuChoice(StimMode mode);
+void executeSettingsMenuChoice();
+void openEditor(const char* name, float* value_ptr, float increment, float min_val, float max_val, bool is_int);
+
 // === ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ===
 ScreenType screen_stack[4] = { SCR_MAIN_MENU };  // СТАРТУЕМ С ГЛАВНОГО МЕНЮ!
 uint8_t stack_depth = 0;
@@ -39,9 +45,9 @@ void handleRotate(int8_t delta) {
       break;
       
     case SCR_MAIN_MENU:
-      // Выбор режима: tRNS, tDCS, tACS (3 опции, индексы 0-2)
+      // Выбор: tRNS, tDCS, tACS, Общие настройки (4 опции, 0-3)
       // Инвертируем: по часовой - вверх (меньший индекс)
-      menu_selected = constrain(menu_selected - delta, 0, 2);
+      menu_selected = constrain(menu_selected - delta, 0, 3);
       break;
       
     case SCR_TRNS_MENU:
@@ -54,6 +60,11 @@ void handleRotate(int8_t delta) {
         uint8_t max_choice = (current_screen == SCR_TACS_MENU) ? 4 : 3;
         menu_selected = constrain(menu_selected - delta, 0, max_choice);
       }
+      break;
+      
+    case SCR_SETTINGS_MENU:
+      // Общие настройки: 5 опций (0-4)
+      menu_selected = constrain(menu_selected - delta, 0, 4);
       break;
       
     case SCR_EDITOR:
@@ -76,12 +87,23 @@ void handleRotate(int8_t delta) {
 
 // === ОБРАБОТЧИК КЛИКА ===
 void handleClick() {
+  // ОТЛАДКА: выводим текущий экран
+  Serial.printf("[CLICK] current_screen=%d, state=%d\n", current_screen, current_state);
+  
   switch (current_screen) {
     case SCR_DASHBOARD:
       // Клик на дашборде - ТОЛЬКО во время сеанса!
-      // Показать подтверждение остановки
-      pushScreen(SCR_CONFIRM);
-      menu_selected = 0;  // По умолчанию "нет"
+      if (current_state != STATE_IDLE) {
+        // Показать подтверждение остановки
+        Serial.println("[CLICK] Dashboard -> SCR_CONFIRM");
+        pushScreen(SCR_CONFIRM);
+        menu_selected = 0;  // По умолчанию "нет"
+      } else {
+        // Если сеанс не идет - возвращаемся в главное меню
+        stack_depth = 0;
+        screen_stack[0] = SCR_MAIN_MENU;
+        menu_selected = 0;
+      }
       break;
       
     case SCR_MAIN_MENU:
@@ -100,6 +122,10 @@ void handleClick() {
       executeSessionMenuChoice(MODE_TACS);
       break;
       
+    case SCR_SETTINGS_MENU:
+      executeSettingsMenuChoice();
+      break;
+      
     case SCR_EDITOR:
       // Сохранить значение и выйти
       *editor_data.value_ptr = editor_temp_value;
@@ -108,12 +134,18 @@ void handleClick() {
       break;
       
     case SCR_CONFIRM:
-      if (menu_selected == 1) {
-        // "Да" - остановить сеанс
-        stopSession();
-        // Показываем экран завершения
+      // Если сеанс уже не идет - просто уходим в главное меню
+      if (current_state == STATE_IDLE) {
         stack_depth = 0;
-        screen_stack[0] = SCR_FINISH;
+        screen_stack[0] = SCR_MAIN_MENU;
+        menu_selected = 0;
+        break;
+      }
+      if (menu_selected == 1) {
+        // "Да, плавный стоп" - ПЕРЕВОДИМ В FADEOUT, НЕ ЗАВЕРШАЕМ!
+        stopSession();  // Это переводит в STATE_FADEOUT
+        // Возвращаемся на DASHBOARD чтобы показать fadeout!
+        popScreen();  // Убираем SCR_CONFIRM, остаёмся на SCR_DASHBOARD
       } else {
         // "Нет" - вернуться к дашборду
         popScreen();
@@ -133,16 +165,16 @@ void handleClick() {
 void executeMainMenuChoice() {
   switch (menu_selected) {
     case 0:  // tRNS
-      current_settings.mode = MODE_TRNS;
       pushScreen(SCR_TRNS_MENU);
       break;
     case 1:  // tDCS
-      current_settings.mode = MODE_TDCS;
       pushScreen(SCR_TDCS_MENU);
       break;
     case 2:  // tACS
-      current_settings.mode = MODE_TACS;
       pushScreen(SCR_TACS_MENU);
+      break;
+    case 3:  // Общие настройки
+      pushScreen(SCR_SETTINGS_MENU);
       break;
   }
 }
@@ -157,7 +189,8 @@ void executeSessionMenuChoice(StimMode mode) {
   // 4: вернуться (только для tACS)
   
   if (menu_selected == 0) {
-    // СТАРТ СЕАНСА
+    // СТАРТ СЕАНСА - устанавливаем режим явно!
+    current_settings.mode = mode;
     startSession();
     // Переходим на DASHBOARD
     stack_depth = 0;
@@ -169,39 +202,95 @@ void executeSessionMenuChoice(StimMode mode) {
     // tACS меню
     switch (menu_selected) {
       case 1:  // Амплитуда
-        openEditor("Амплитуда мА", &current_settings.amplitude_mA, 0.1f, 0.1f, 2.0f, false);
+        openEditor("Амплитуда мА", &current_settings.amplitude_tACS_mA, 
+                   AMPLITUDE_INCREMENT_MA, MIN_AMPLITUDE_MA, MAX_AMPLITUDE_MA, false);
         break;
       case 2:  // Частота
-        openEditor("Частота Гц", &current_settings.frequency_Hz, 1.0f, 0.5f, 640.0f, false);
+        openEditor("Частота Гц", &current_settings.frequency_tACS_Hz, 
+                   TACS_FREQ_INCREMENT_HZ, MIN_TACS_FREQ_HZ, MAX_TACS_FREQ_HZ, false);
         break;
       case 3:  // Продолжительность
         {
-          static float duration_float = current_settings.duration_min;
-          openEditor("Длительность мин", &duration_float, 1.0f, 1.0f, 60.0f, true);
-          current_settings.duration_min = (uint16_t)duration_float;
+          static float duration_float = current_settings.duration_tACS_min;
+          openEditor("Длительность мин", &duration_float, 
+                     DURATION_INCREMENT_MIN, MIN_DURATION_MIN, MAX_DURATION_MIN, true);
+          current_settings.duration_tACS_min = (uint16_t)duration_float;
         }
         break;
       case 4:  // Вернуться
         popScreen();
         break;
     }
-  } else {
-    // tRNS/tDCS меню
+  } else if (mode == MODE_TDCS) {
+    // tDCS меню
     switch (menu_selected) {
-      case 1:  // Амплитуда
-        openEditor("Амплитуда мА", &current_settings.amplitude_mA, 0.1f, 0.1f, 2.0f, false);
+      case 1:  // Макс. ток
+        openEditor("Макс. ток мА", &current_settings.amplitude_tDCS_mA, 
+                   AMPLITUDE_INCREMENT_MA, MIN_AMPLITUDE_MA, MAX_AMPLITUDE_MA, false);
         break;
       case 2:  // Продолжительность
         {
-          static float duration_float = current_settings.duration_min;
-          openEditor("Длительность мин", &duration_float, 1.0f, 1.0f, 60.0f, true);
-          current_settings.duration_min = (uint16_t)duration_float;
+          static float duration_float = current_settings.duration_tDCS_min;
+          openEditor("Длительность мин", &duration_float, 
+                     DURATION_INCREMENT_MIN, MIN_DURATION_MIN, MAX_DURATION_MIN, true);
+          current_settings.duration_tDCS_min = (uint16_t)duration_float;
         }
         break;
       case 3:  // Вернуться
         popScreen();
         break;
     }
+  } else if (mode == MODE_TRNS) {
+    // tRNS меню
+    switch (menu_selected) {
+      case 1:  // Амплитуда
+        openEditor("Амплитуда мА", &current_settings.amplitude_tRNS_mA, 
+                   AMPLITUDE_INCREMENT_MA, MIN_AMPLITUDE_MA, MAX_AMPLITUDE_MA, false);
+        break;
+      case 2:  // Продолжительность
+        {
+          static float duration_float = current_settings.duration_tRNS_min;
+          openEditor("Длительность мин", &duration_float, 
+                     DURATION_INCREMENT_MIN, MIN_DURATION_MIN, MAX_DURATION_MIN, true);
+          current_settings.duration_tRNS_min = (uint16_t)duration_float;
+        }
+        break;
+      case 3:  // Вернуться
+        popScreen();
+        break;
+    }
+  }
+}
+
+// === ВЫПОЛНЕНИЕ ВЫБОРА В МЕНЮ ОБЩИХ НАСТРОЕК ===
+void executeSettingsMenuChoice() {
+  // Структура меню:
+  // 0: Назад
+  // 1: ADC_V2mA
+  // 2: DAC_Code2mA
+  // 3: Плавный пуск, с
+  // 4: Сбросить на заводские
+  
+  switch (menu_selected) {
+    case 0:  // Назад
+      popScreen();
+      break;
+    case 1:  // ADC_V2mA
+      openEditor("ADC_V2mA", &current_settings.adc_v_to_mA, 
+                 ADC_V_TO_MA_INCREMENT, MIN_ADC_V_TO_MA, MAX_ADC_V_TO_MA, false);
+      break;
+    case 2:  // DAC_Code2mA
+      openEditor("DAC_Code2mA", &current_settings.dac_code_to_mA, 
+                 DAC_CODE_TO_MA_INCREMENT, MIN_DAC_CODE_TO_MA, MAX_DAC_CODE_TO_MA, false);
+      break;
+    case 3:  // Плавный пуск, с
+      openEditor("Плавн.пуск,с", &current_settings.fade_duration_sec, 
+                 FADE_DURATION_INCREMENT, MIN_FADE_DURATION_SEC, MAX_FADE_DURATION_SEC, false);
+      break;
+    case 4:  // Сбросить на заводские
+      resetToDefaults();
+      popScreen();  // Вернуться в главное меню
+      break;
   }
 }
 

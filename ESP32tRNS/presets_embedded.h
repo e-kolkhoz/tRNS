@@ -4,19 +4,20 @@
 #include <Arduino.h>
 #include "config.h"
 
-// Встроенные пресеты — компилируются прямо в прошивку
-// Генерируются из WAV файлов с помощью скрипта
+// Встроенные пресеты — хранятся в base64, декодируются при загрузке
 
 struct EmbeddedPreset {
   const char* name;
-  const int16_t* samples;
   size_t sample_count;
 };
 
-// Пресет будет здесь после генерации
-// Пока пустой массив
-extern const int16_t PRESET_NOISE_100_640[];
+// Base64 пресет (декодируется в signal_buffer при старте)
+extern const char PRESET_B64[] PROGMEM;
 extern const size_t PRESET_NOISE_100_640_SIZE;
+
+// Декодировать пресет в указанный буфер
+// Возвращает количество декодированных семплов
+size_t decodePresetToBuffer(int16_t* buffer, size_t max_samples);
 
 extern const EmbeddedPreset EMBEDDED_PRESETS[];
 extern const size_t EMBEDDED_PRESETS_COUNT;

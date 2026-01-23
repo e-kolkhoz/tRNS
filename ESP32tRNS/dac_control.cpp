@@ -7,7 +7,8 @@
 int16_t* signal_buffer = NULL;  // МОНО знаковый буфер (исходный сигнал)
 bool dma_prefilled = false;
 char current_preset_name[PRESET_NAME_MAX_LEN] = "No preset loaded";
-float dac_gain = DEFAULT_GAIN;  // Коэффициент усиления (по умолчанию 1.0)
+float dynamic_dac_gain = 0.0f;  // Динамический gain для fadein/fadeout (начинаем с 0)
+static float amplitude_scale = 1.0f;  // Масштаб амплитуды (0..1) для мА → DAC
 
 // Временный стерео-буфер для отправки в I2S DMA
 // Формируется из МОНО signal_buffer → СТЕРЕО [sign, magnitude]
@@ -19,54 +20,73 @@ static uint32_t stereo_buffer_pos = 0;
 
 // Буфер для фрагмента (FRAGMENT_SAMPLES стерео-сэмплов)
 static int16_t* stereo_buffer_fragment = NULL;
+static bool dac_active = false;
 
-// Заполнить стерео-буфер из МОНО: [L_CONST, R*gain, L_CONST, R*gain, ...]
-// Формирование sign-magnitude стерео для H-моста
+// Заполнить стерео-буфер из МОНО с амплитудным масштабом (без fade gain)
+// Формирование sign-magnitude стерео для H-моста:
 // Левый канал = знак (32767=положительный, 0=отрицательный)
-// Правый канал = модуль с gain и насыщением
+// Правый канал = модуль * amplitude_scale (без dynamic_dac_gain)
 static void fillStereoBuffer() {
   for (int i = 0; i < SIGNAL_SAMPLES; i++) {
-    // Применяем gain к исходному сигналу
-    float sample_with_gain = signal_buffer[i] * dac_gain;
+    int16_t sample = signal_buffer[i];
     
     // Определяем знак и модуль
-    bool is_positive = (sample_with_gain >= 0.0f);
+    bool is_positive = (sample >= 0);
     
     // Применяем инверсию полярности (если электроды перепутаны)
     #if POLARITY_INVERT
       is_positive = !is_positive;
     #endif
     
-    float magnitude = fabsf(sample_with_gain);
-    
-    // Насыщение модуля для int16: [0, 32767] (униполярный DAC!)
-    int16_t mag_saturated;
-    if (magnitude > 32767.0f) {
-      mag_saturated = 32767;
-    } else {
-      mag_saturated = (int16_t)magnitude;
-    }
-    
     // Левый канал = знак
     stereo_buffer[i * 2] = is_positive ? DAC_SIGN_POSITIVE : DAC_SIGN_NEGATIVE;
     
-    // Правый канал = модуль (всегда >= 0)
-    stereo_buffer[i * 2 + 1] = mag_saturated;
+    // Правый канал = модуль * amplitude_scale (с насыщением)
+    int16_t mag = (sample >= 0) ? sample : -sample;
+    float scaled = mag * amplitude_scale;
+    if (scaled > 32767.0f) scaled = 32767.0f;
+    stereo_buffer[i * 2 + 1] = (int16_t)scaled;
   }
 }
 
 // Копировать фрагмент из stereo_buffer в stereo_buffer_fragment с кольцевым доступом
+// ВАЖНО: dynamic_dac_gain применяется ТОЛЬКО на выходе (fadein/fadeout)
+// ВАЖНО: i % 2 определяет L/R в выходном fragment, НЕ src_idx!
 static void copyFragmentFromStereoBuffer(uint32_t start_pos) {
+  float gain = dynamic_dac_gain;  // Копируем локально для консистентности
+  
+  // В IDLE (gain=0) выводим тишину на оба канала!
+  if (gain <= 0.0f) {
+    for (uint32_t i = 0; i < FRAGMENT_SAMPLES; i++) {
+      stereo_buffer_fragment[i] = 0;
+    }
+    return;
+  }
+  
+  // ГАРАНТИРУЕМ что start_pos чётный (начинаем с L канала)!
+  start_pos = start_pos & ~1u;
+  
   for (uint32_t i = 0; i < FRAGMENT_SAMPLES; i++) {
     uint32_t src_idx = (start_pos + i) % STEREO_BUFFER_SIZE;
-    stereo_buffer_fragment[i] = stereo_buffer[src_idx];
+    
+    // i % 2 == 0 = левый канал (знак) - НЕ масштабируем!
+    // i % 2 == 1 = правый канал (модуль) - применяем dynamic_dac_gain!
+    if (i % 2 == 0) {
+      // Левый канал = знак, копируем как есть (ВСЕГДА полный уровень!)
+      stereo_buffer_fragment[i] = stereo_buffer[src_idx];
+    } else {
+      // Правый канал = модуль, применяем gain
+      float scaled = stereo_buffer[src_idx] * gain;
+      stereo_buffer_fragment[i] = (scaled > 32767.0f) ? 32767 : (int16_t)scaled;
+    }
   }
 }
 
 // Записать подготовленный фрагмент во внутренний DMA буфер I2S
 // timeout_ticks = 0 → неблокирующий; больше 0 → ждём указанное время
 static bool writeFragmentToDMA(TickType_t timeout_ticks) {
-  const uint32_t start_pos = stereo_buffer_pos;
+  // Стартуем только с чётной позиции (L канал)
+  const uint32_t start_pos = stereo_buffer_pos & ~1u;
   copyFragmentFromStereoBuffer(start_pos);
   
   size_t bytes_written = 0;
@@ -80,7 +100,11 @@ static bool writeFragmentToDMA(TickType_t timeout_ticks) {
   
   if (result == ESP_OK && bytes_written > 0) {
     uint32_t samples_written = bytes_written / sizeof(int16_t);
-    stereo_buffer_pos = (start_pos + samples_written) % STEREO_BUFFER_SIZE;
+    // Всегда сохраняем выравнивание по L/R
+    samples_written &= ~1u;
+    if (samples_written > 0) {
+      stereo_buffer_pos = (start_pos + samples_written) % STEREO_BUFFER_SIZE;
+    }
     return true;
   }
   
@@ -187,9 +211,81 @@ void prefillDMABuffers() {
   scheduleADCCaptureStart(ADC_CAPTURE_DELAY_MS);
 }
 
+// Отладка DAC - время последнего вывода
 // Поддержание DMA буферов заполненными (неблокирующе!)
 // Возвращает true если удалось отправить новый фрагмент
 bool keepDMAFilled() {
-  return writeFragmentToDMA(pdMS_TO_TICKS(1));
+  static uint32_t last_call_ms = 0;
+  static uint32_t last_gap_warn_ms = 0;
+  
+  uint32_t now = millis();
+  uint32_t gap_ms = now - last_call_ms;
+  
+  // Алерт: если между вызовами прошло > 200мс — возможен underrun
+  // При 8000Hz и буфере 3200 фреймов = 400мс, так что 200мс — половина буфера
+  if (dac_active && last_call_ms > 0 && gap_ms > 200) {
+    if (now - last_gap_warn_ms > 500) {  // не спамить чаще 500мс
+      last_gap_warn_ms = now;
+      extern uint32_t session_timer_start_ms;
+      uint32_t session_sec = (session_timer_start_ms > 0) ? (now - session_timer_start_ms) / 1000 : 0;
+      Serial.printf("[DAC @%lus] LOOP GAP: %lu ms! UNDERRUN RISK\n", session_sec, gap_ms);
+    }
+  }
+  last_call_ms = now;
+  
+  if (!dac_active) {
+    return false;
+  }
+  // Timeout 10ms — достаточно чтобы дождаться места в буфере, но не блокировать надолго
+  // Заполняем все доступные DMA слоты, но ограничиваем число попыток
+  bool result = false;
+  const int kMaxWritesPerLoop = 4;
+  for (int i = 0; i < kMaxWritesPerLoop; i++) {
+    if (!writeFragmentToDMA(pdMS_TO_TICKS(10))) {
+      break;
+    }
+    result = true;
+  }
+  
+  return result;
+}
+
+// Обновить стерео-буфер после изменения signal_buffer (например, после generateSignal)
+void updateStereoBuffer() {
+  fillStereoBuffer();
+}
+
+void setAmplitudeScale(float scale) {
+  if (scale < 0.0f) scale = 0.0f;
+  if (scale > 1.0f) scale = 1.0f;
+  amplitude_scale = scale;
+}
+
+void resetDacPlayback() {
+  // Полный перезапуск I2S, чтобы гарантированно убрать старые данные
+  i2s_stop(I2S_NUM);
+  i2s_zero_dma_buffer(I2S_NUM);
+  // Сбрасываем позиции и флаги
+  stereo_buffer_pos = 0;
+  dma_prefilled = false;
+  // Запускаем I2S и заново заполняем DMA актуальным сигналом
+  i2s_start(I2S_NUM);
+  dac_active = true;
+  prefillDMABuffers();
+}
+
+void startDacPlayback() {
+  if (!dac_active) {
+    i2s_start(I2S_NUM);
+    dac_active = true;
+  }
+}
+
+void stopDacPlayback() {
+  if (dac_active) {
+    i2s_stop(I2S_NUM);
+    dac_active = false;
+    i2s_zero_dma_buffer(I2S_NUM);
+  }
 }
 

@@ -8,11 +8,10 @@
 SessionSettings current_settings;
 SessionState current_state = STATE_IDLE;
 uint32_t session_elapsed_sec = 0;  // Фактическое время последнего сеанса (секунды)
+uint32_t session_timer_start_ms = 0;  // Время старта сеанса для таймера на дисплее
 
 // === ВНУТРЕННИЕ ПЕРЕМЕННЫЕ ===
-static uint32_t session_start_time = 0;     // Время старта сеанса
-static uint32_t fadein_duration_ms = 5000;  // Длительность fadein (5 сек)
-static uint32_t fadeout_duration_ms = 5000; // Длительность fadeout (5 сек)
+static uint32_t session_start_time = 0;     // Время старта текущего состояния сеанса
 
 // EEPROM адреса
 #define EEPROM_SIZE 512
@@ -20,32 +19,57 @@ static uint32_t fadeout_duration_ms = 5000; // Длительность fadeout 
 #define EEPROM_ADDR_MAGIC 0
 #define EEPROM_ADDR_SETTINGS 2
 
-// Дефолтные настройки
+// Дефолтные настройки для каждого режима (из config.h)
 static const SessionSettings default_settings = {
   .mode = MODE_TRNS,
-  .amplitude_mA = 1.0f,
-  .duration_min = 20,
-  .frequency_Hz = 140.0f  // Для tACS
+  
+  .amplitude_tDCS_mA = DEF_AMPLITUDE_MA,
+  .duration_tDCS_min = DEF_DURATION_MIN,
+  .amplitude_tRNS_mA = DEF_AMPLITUDE_MA,
+  .duration_tRNS_min = DEF_DURATION_MIN,
+  .amplitude_tACS_mA = DEF_AMPLITUDE_MA,
+  .duration_tACS_min = DEF_DURATION_MIN,
+  .frequency_tACS_Hz = DEF_TACS_FREQUENCY_HZ,
+  
+  // Общие настройки (заводские из config.h)
+  .adc_v_to_mA = DEF_ADC_V_TO_MA,
+  .dac_code_to_mA = DEF_DAC_CODE_TO_MA,
+  .fade_duration_sec = DEF_FADE_DURATION_SEC
 };
 
 // === ИНИЦИАЛИЗАЦИЯ ===
 void initSession() {
-  EEPROM.begin(EEPROM_SIZE);
+  Serial.println("[SESSION] initSession() begin");
+  if (!EEPROM.begin(EEPROM_SIZE)) {
+    Serial.println("[SESSION] EEPROM.begin FAILED");
+  } else {
+    Serial.println("[SESSION] EEPROM.begin OK");
+  }
   loadSettings();
   current_state = STATE_IDLE;
+  Serial.println("[SESSION] initSession() done");
 }
 
 // === EEPROM ===
 void loadSettings() {
+  Serial.println("[SESSION] loadSettings()");
   uint16_t magic = EEPROM.readUShort(EEPROM_ADDR_MAGIC);
   
   if (magic == EEPROM_MAGIC) {
     // EEPROM валиден - загружаем
     EEPROM.get(EEPROM_ADDR_SETTINGS, current_settings);
+    Serial.println("[SESSION] EEPROM valid, settings loaded");
   } else {
     // EEPROM пуст - используем дефолт БЕЗ сохранения
     current_settings = default_settings;
     // saveSettings() вызовется при первом изменении настроек
+    Serial.println("[SESSION] EEPROM empty, defaults applied");
+  }
+
+  // Валидация калибровки DAC (коды/мА)
+  if (current_settings.dac_code_to_mA < MIN_DAC_CODE_TO_MA ||
+      current_settings.dac_code_to_mA > MAX_DAC_CODE_TO_MA) {
+    current_settings.dac_code_to_mA = DEF_DAC_CODE_TO_MA;
   }
 }
 
@@ -54,11 +78,8 @@ void saveSettings() {
   SessionSettings stored_settings;
   EEPROM.get(EEPROM_ADDR_SETTINGS, stored_settings);
   
-  // Сравниваем все поля
-  if (stored_settings.mode == current_settings.mode &&
-      stored_settings.amplitude_mA == current_settings.amplitude_mA &&
-      stored_settings.frequency_Hz == current_settings.frequency_Hz &&
-      stored_settings.duration_min == current_settings.duration_min) {
+  // Сравниваем все поля (memcmp проще!)
+  if (memcmp(&stored_settings, &current_settings, sizeof(SessionSettings)) == 0) {
     // Настройки не изменились, не пишем
     return;
   }
@@ -69,6 +90,11 @@ void saveSettings() {
   EEPROM.commit();
 }
 
+void resetToDefaults() {
+  current_settings = default_settings;
+  saveSettings();
+}
+
 // === ГЕНЕРАЦИЯ СИГНАЛОВ ===
 
 // Генератор tDCS - константа
@@ -77,13 +103,13 @@ static void generateTDCS() {
   for (uint32_t i = 0; i < SIGNAL_SAMPLES; i++) {
     signal_buffer[i] = MAX_VAL;  // Максимальное положительное значение
   }
-  snprintf(current_preset_name, PRESET_NAME_MAX_LEN, "tDCS %.1fmA %dmin", 
-           current_settings.amplitude_mA, current_settings.duration_min);
+  snprintf(current_preset_name, PRESET_NAME_MAX_LEN, "tDCS %.1fmA %umin", 
+           current_settings.amplitude_tDCS_mA, current_settings.duration_tDCS_min);
 }
 
 // Генератор tACS - синусоида
 static void generateTACS() {
-  float freq = getValidTACSFrequency(current_settings.frequency_Hz);
+  float freq = getValidTACSFrequency(current_settings.frequency_tACS_Hz);
   float omega = 2.0f * PI * freq / SAMPLE_RATE;
   
   for (uint32_t i = 0; i < SIGNAL_SAMPLES; i++) {
@@ -92,18 +118,20 @@ static void generateTACS() {
     signal_buffer[i] = (int16_t)sample;
   }
   
-  snprintf(current_preset_name, PRESET_NAME_MAX_LEN, "tACS %.1fHz %.1fmA", 
-           freq, current_settings.amplitude_mA);
+  snprintf(current_preset_name, PRESET_NAME_MAX_LEN, "tACS %.0fГц %.1fmA", 
+           freq, current_settings.amplitude_tACS_mA);
 }
 
 // Главная функция генерации
 void generateSignal() {
   switch (current_settings.mode) {
     case MODE_TRNS:
-      // tRNS уже загружен из PROGMEM в loadPresetFromFlash()
-      // Просто обновляем имя
-      snprintf(current_preset_name, PRESET_NAME_MAX_LEN, "tRNS 100-640Hz %.1fmA", 
-               current_settings.amplitude_mA);
+      // Загружаем tRNS пресет из PROGMEM при каждом старте
+      if (!loadPresetFromFlash(signal_buffer, current_preset_name, PRESET_NAME_MAX_LEN)) {
+        // Если пресет не загрузился, хотя бы оставим имя по умолчанию
+        snprintf(current_preset_name, PRESET_NAME_MAX_LEN, "tRNS 100-640Гц %.1fmA", 
+                 current_settings.amplitude_tRNS_mA);
+      }
       break;
       
     case MODE_TDCS:
@@ -115,88 +143,141 @@ void generateSignal() {
       break;
   }
   
-  // Обновляем gain для нужной амплитуды
-  // Расчёт: gain = (amplitude_mA / max_mA) * DEFAULT_GAIN
-  // Предполагаем max_mA = 2.0 мА при gain = 1.0
-  dac_gain = (current_settings.amplitude_mA / 2.0f);
-  if (dac_gain > 1.0f) dac_gain = 1.0f;  // Ограничение
-  if (dac_gain < 0.0f) dac_gain = 0.0f;
+  // ВАЖНО: dynamic_dac_gain НЕ трогаем здесь!
+  // Он управляется автоматически в updateSession() для fadein/fadeout
+  // Амплитуда регулируется через scaling в signal_buffer (уже учтено в генераторах)
 }
 
 // === УПРАВЛЕНИЕ СЕАНСОМ ===
 void startSession() {
   if (current_state == STATE_IDLE) {
     // Генерируем сигнал для текущего режима
-    if (current_settings.mode != MODE_TRNS) {
-      generateSignal();  // tDCS/tACS генерятся на лету
-    }
+    generateSignal();  // Всегда вызываем - и для tRNS обновит имя
     
+    // Настраиваем масштаб амплитуды по мА → код DAC
+    float amplitude_mA = current_settings.amplitude_tRNS_mA;
+    switch (current_settings.mode) {
+      case MODE_TDCS: amplitude_mA = current_settings.amplitude_tDCS_mA; break;
+      case MODE_TACS: amplitude_mA = current_settings.amplitude_tACS_mA; break;
+      case MODE_TRNS: default: break;
+    }
+    // dac_code_to_mA = сколько КОДОВ на 1 мА
+    float target_code = (current_settings.dac_code_to_mA > 0.0f)
+                          ? (amplitude_mA * current_settings.dac_code_to_mA)
+                          : 0.0f;
+    if (target_code < 0.0f) target_code = 0.0f;
+    if (target_code > 32767.0f) target_code = 32767.0f;
+    setAmplitudeScale(target_code / 32767.0f);
+    
+    // ВАЖНО: Обновляем стерео-буфер после генерации сигнала!
+    updateStereoBuffer();
+
+    // Сбрасываем DMA и заполняем заново, чтобы не играть старый мусор
+    resetDacPlayback();
+
+    // Включаем DAC только при старте сеанса
+    startDacPlayback();
+    
+    // СБРАСЫВАЕМ ТАЙМЕР СЕАНСА!
+    session_timer_start_ms = millis();
+    
+    // НАЧИНАЕМ FADEIN с нулевого gain!
+    dynamic_dac_gain = 0.0f;
     session_start_time = millis();
     current_state = STATE_FADEIN;
   }
 }
 
+// Начальный gain при входе в FADEOUT (для плавного спуска с текущего значения)
+static float fadeout_start_gain = 1.0f;
+
 void stopSession() {
-  if (current_state == STATE_STABLE || current_state == STATE_FADEIN) {
-    // Сохраняем фактическое время сеанса (с учётом fadein)
-    uint32_t total_elapsed_ms = millis() - session_start_time;
-    if (current_state == STATE_STABLE) {
-      // В stable: добавляем время fadein
-      session_elapsed_sec = (fadein_duration_ms + total_elapsed_ms) / 1000;
-    } else {
-      // В fadein: только фактическое время
-      session_elapsed_sec = total_elapsed_ms / 1000;
-    }
+  // УНИВЕРСАЛЬНАЯ ОСТАНОВКА: просто переводим в FADEOUT
+  // dynamic_dac_gain начинает декрементироваться С ТЕКУЩЕГО значения!
+  if (current_state == STATE_FADEIN || current_state == STATE_STABLE) {
+    // Сохраняем фактическое время сеанса ОТ НАЧАЛА (session_timer_start_ms)!
+    session_elapsed_sec = (millis() - session_timer_start_ms) / 1000;
     
+    // ЗАПОМИНАЕМ текущий gain для плавного спуска!
+    fadeout_start_gain = dynamic_dac_gain;
+    
+    // Переходим в FADEOUT (gain начнёт падать с текущего значения)
     current_state = STATE_FADEOUT;
-    session_start_time = millis();  // Перезапускаем таймер для fadeout
+    session_start_time = millis();  // Для отсчёта времени fadeout
   }
+  // Если уже в FADEOUT - ничего не делаем (непрерываемый fadeout!)
 }
 
 void updateSession() {
   uint32_t now = millis();
-  uint32_t elapsed = now - session_start_time;
+  float elapsed_sec = (now - session_start_time) / 1000.0f;
+  
+  // Используем fade_duration_sec из настроек!
+  float fade_duration = current_settings.fade_duration_sec;
   
   switch (current_state) {
     case STATE_IDLE:
-      // Ничего не делаем
+      // Ничего не делаем, gain = 0
+      dynamic_dac_gain = 0.0f;
       break;
       
     case STATE_FADEIN:
-      if (elapsed >= fadein_duration_ms) {
-        // Fadein завершён → переход в stable
+      // Линейное нарастание 0.0 → 1.0 за fade_duration
+      dynamic_dac_gain = elapsed_sec / fade_duration;
+      
+      // Проверка перехода в STABLE при достижении 1.0
+      if (dynamic_dac_gain >= 1.0f) {
+        dynamic_dac_gain = 1.0f;  // Насыщение
         current_state = STATE_STABLE;
-        session_start_time = now;
-      } else {
-        // Плавно увеличиваем gain
-        float progress = (float)elapsed / fadein_duration_ms;
-        float target_gain = (current_settings.amplitude_mA / 2.0f);
-        dac_gain = target_gain * progress;
+        session_start_time = now;  // Сброс таймера для stable
       }
       break;
       
     case STATE_STABLE:
+      // Gain постоянно = 1.0
+      dynamic_dac_gain = 1.0f;
+      
+      // Проверка окончания сеанса по заданной длительности
       {
-        uint32_t duration_ms = current_settings.duration_min * 60UL * 1000UL;
-        if (elapsed >= duration_ms) {
-          // Время вышло → автоматический fadeout
-          stopSession();
+        // Выбираем длительность в зависимости от режима
+        uint16_t duration_min = DEF_DURATION_MIN;  // дефолт из config.h
+        switch (current_settings.mode) {
+          case MODE_TRNS: duration_min = current_settings.duration_tRNS_min; break;
+          case MODE_TDCS: duration_min = current_settings.duration_tDCS_min; break;
+          case MODE_TACS: duration_min = current_settings.duration_tACS_min; break;
+        }
+        
+        uint32_t total_duration_sec = duration_min * 60;
+        // Общее время = fadein + stable + fadeout
+        // Время в STABLE = total - fadein - fadeout = total - 2*fade
+        float stable_time = total_duration_sec - 2.0f * fade_duration;
+        if (stable_time < 0) stable_time = 0;  // Защита от отрицательного времени
+        if (elapsed_sec >= stable_time) {
+          // Автоматический переход в fadeout
+          fadeout_start_gain = 1.0f;  // Из STABLE всегда начинаем с 1.0
+          current_state = STATE_FADEOUT;
+          session_start_time = now;  // Сброс таймера для fadeout
         }
       }
       break;
       
     case STATE_FADEOUT:
-      if (elapsed >= fadeout_duration_ms) {
-        // Fadeout завершён → переход в idle
-        current_state = STATE_IDLE;
-        dac_gain = 0.0f;
-        // Показываем экран завершения (если это было автозавершение)
-        // Вызывается из menu_control после обнаружения STATE_IDLE
-      } else {
-        // Плавно уменьшаем gain
-        float progress = 1.0f - ((float)elapsed / fadeout_duration_ms);
-        float target_gain = (current_settings.amplitude_mA / 2.0f);
-        dac_gain = target_gain * progress;
+      {
+        // Линейное убывание С ТЕКУЩЕГО gain до 0.0
+        // Время fadeout пропорционально текущему gain: если gain=0.5, то fadeout=10сек (не 20)
+        float fadeout_time = fadeout_start_gain * fade_duration;
+        if (fadeout_time < 0.1f) fadeout_time = 0.1f;  // Минимум 0.1 сек
+        
+        dynamic_dac_gain = fadeout_start_gain * (1.0f - elapsed_sec / fadeout_time);
+        
+        // Проверка перехода в IDLE при достижении 0.0
+        if (dynamic_dac_gain <= 0.0f) {
+          dynamic_dac_gain = 0.0f;  // Насыщение
+          current_state = STATE_IDLE;
+          // Останавливаем DAC в idle, чтобы не было мусора
+          stopDacPlayback();
+          // Автоматически покажется SCR_FINISH через isSessionJustFinished()
+        }
       }
       break;
   }

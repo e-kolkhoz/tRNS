@@ -15,6 +15,7 @@ enum ScreenType {
   SCR_TRNS_MENU,      // Меню tRNS (старт/настройки)
   SCR_TDCS_MENU,      // Меню tDCS (старт/настройки)
   SCR_TACS_MENU,      // Меню tACS (старт/настройки)
+  SCR_SETTINGS_MENU,  // Общие настройки (калибровка)
   SCR_EDITOR,         // Редактор параметра
   SCR_DASHBOARD,      // Дашборд (ТОЛЬКО во время сеанса!)
   SCR_CONFIRM,        // Подтверждение остановки

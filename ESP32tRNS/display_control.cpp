@@ -15,8 +15,7 @@ U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 // Статус устройства для отображения
 static char device_status[32] = "Ready";
 static uint32_t last_display_update = 0;
-static const uint32_t DISPLAY_UPDATE_INTERVAL_MS = 200;  // Обновление каждые 200 мс
-static uint32_t timer_start_ms = 0;  // Начальная точка таймера (ms)
+static const uint32_t DISPLAY_UPDATE_INTERVAL_MS = 200;  // Обновление каждые 500 мс — чтобы не блокировать DAC!
 
 // Инициализация дисплея
 void initDisplay() {
@@ -32,7 +31,6 @@ void initDisplay() {
   u8g2.setDrawColor(1);
   u8g2.setFontPosTop();
   u8g2.setFontDirection(0);
-  timer_start_ms = millis();
   
   // Приветственный экран
   u8g2.clearBuffer();
@@ -100,10 +98,16 @@ void refreshDisplay() {
     preset_display[23] = '\0';
   }
   u8g2.drawStr(0, 0, preset_display);
+  
+  // ПРАВЫЙ ВЕРХНИЙ УГОЛ: dynamic_dac_gain в формате X.X
+  extern float dynamic_dac_gain;
+  char gain_str[6];
+  snprintf(gain_str, sizeof(gain_str), "%.1f", dynamic_dac_gain);
+  u8g2.drawStr(110, 0, gain_str);  // Правый край
 
   // === СТРОКА 2: Таймер MM:SS (крупный шрифт) ===
   u8g2.setFont(u8g2_font_7x13_t_cyrillic);
-  uint32_t elapsed_sec = (millis() - timer_start_ms) / 1000;
+  uint32_t elapsed_sec = (millis() - session_timer_start_ms) / 1000;
   uint16_t minutes_total = elapsed_sec / 60;
   uint8_t seconds = elapsed_sec % 60;
   if (minutes_total > 99) {
@@ -124,9 +128,10 @@ void refreshDisplay() {
   if (adc_valid) {
     char stats_str[32];
     // Напряжения уже знаковые (sign-magnitude реконструкция)
-    float p1_mA = p1_v * ADC_V_TO_MA;
-    float mean_mA = mean_v * ADC_V_TO_MA;
-    float p99_mA = p99_v * ADC_V_TO_MA;
+    // Используем калибровочный коэффициент из настроек
+    float p1_mA = p1_v * current_settings.adc_v_to_mA;
+    float mean_mA = mean_v * current_settings.adc_v_to_mA;
+    float p99_mA = p99_v * current_settings.adc_v_to_mA;
     
 
     snprintf(stats_str, sizeof(stats_str), "%.1f > %.1f < %.1f", p1_mA, mean_mA, p99_mA);
@@ -137,7 +142,7 @@ void refreshDisplay() {
   }
   
   // === СТРОКИ 3-6: Гистограмму ADC ===
-  const uint8_t NUM_BINS = 15;  // 16 столбцов для гистограммы
+  const uint8_t NUM_BINS = 11;  // Меньше бинов = шире каждый = меньше шума ADC
   uint16_t adc_bins[NUM_BINS];
   bool adc_hist_ok = buildADCHistogram(adc_bins, NUM_BINS);
   
@@ -156,7 +161,7 @@ void refreshDisplay() {
     const uint8_t HIST_HEIGHT = 18;  // Высота столбцов гистограммы
     //const uint8_t HIST_Y_PRESET = 26;  // Y координата для пресета
     const uint8_t HIST_Y_ADC = 26;     // Y координата для ADC
-    const uint8_t BIN_WIDTH = 7;        // Ширина столбца (128 / 15 = 8, но с отступами 7)
+    const uint8_t BIN_WIDTH = 10;       // Ширина столбца (128 / 11 ≈ 11)
     const uint8_t BIN_SPACING = 1;      // Отступ между столбцами
     
     
@@ -169,8 +174,11 @@ void refreshDisplay() {
       }
     }
   } else {
-    u8g2.setFont(u8g2_font_6x12_t_cyrillic);
-    u8g2.drawStr(0, 30, "Histograms: waiting...");
+    // Чтобы не накладывать текст "ADC: waiting..." и "Histograms: waiting..."
+    if (adc_valid) {
+      u8g2.setFont(u8g2_font_6x12_t_cyrillic);
+      u8g2.drawStr(0, 40, "Histograms: waiting...");
+    }
   }
   
   u8g2.sendBuffer();
@@ -234,12 +242,12 @@ void renderConfirm() {
     u8g2.setCursor(0, 25);
     u8g2.print("> Нет, продолжить");
     u8g2.setCursor(0, 40);
-    u8g2.print("  Да, остановить");
+    u8g2.print("  Да, плавный стоп");
   } else {
     u8g2.setCursor(0, 25);
     u8g2.print("  Нет, продолжить");
     u8g2.setCursor(0, 40);
-    u8g2.print("> Да, остановить");
+    u8g2.print("> Да, плавный стоп");
   }
   
   u8g2.sendBuffer();
@@ -254,29 +262,50 @@ void renderCurrentScreen() {
       
     case SCR_MAIN_MENU:
       {
-        const char* choices[] = { "tRNS", "tDCS", "tACS" };
-        renderMenu("Выбор режима", choices, 3, menu_selected);
+        const char* choices[] = { "tRNS", "tDCS", "tACS", "Общие настройки" };
+        renderMenu("Главное меню", choices, 4, menu_selected);
       }
       break;
       
     case SCR_TRNS_MENU:
       {
-        const char* choices[] = { "СТАРТ", "Амплитуда", "Длительность", "Назад" };
+        static char amp_str[48], dur_str[48];
+        snprintf(amp_str, sizeof(amp_str), "Амплитуда: %.1fмА", current_settings.amplitude_tRNS_mA);
+        snprintf(dur_str, sizeof(dur_str), "Длительность: %uм", current_settings.duration_tRNS_min);
+        const char* choices[] = { "СТАРТ", amp_str, dur_str, "<-Назад" };
         renderMenu("tRNS", choices, 4, menu_selected);
       }
       break;
       
     case SCR_TDCS_MENU:
       {
-        const char* choices[] = { "СТАРТ", "Макс. ток", "Длительность", "Назад" };
+        static char amp_str[48], dur_str[48];
+        snprintf(amp_str, sizeof(amp_str), "Макс.ток: %.1fмА", current_settings.amplitude_tDCS_mA);
+        snprintf(dur_str, sizeof(dur_str), "Длительность: %uм", current_settings.duration_tDCS_min);
+        const char* choices[] = { "СТАРТ", amp_str, dur_str, "<-Назад" };
         renderMenu("tDCS", choices, 4, menu_selected);
       }
       break;
       
     case SCR_TACS_MENU:
       {
-        const char* choices[] = { "СТАРТ", "Амплитуда", "Частота", "Длительность", "Назад" };
+        static char amp_str[48], freq_str[48], dur_str[48];
+        snprintf(amp_str, sizeof(amp_str), "Амплитуда: %.1fмА", current_settings.amplitude_tACS_mA);
+        snprintf(freq_str, sizeof(freq_str), "Частота: %.0fГц", current_settings.frequency_tACS_Hz);
+        snprintf(dur_str, sizeof(dur_str), "Длительность: %uм", current_settings.duration_tACS_min);
+        const char* choices[] = { "СТАРТ", amp_str, freq_str, dur_str, "<-Назад" };
         renderMenu("tACS", choices, 5, menu_selected);
+      }
+      break;
+      
+    case SCR_SETTINGS_MENU:
+      {
+        static char adc_str[48], dac_str[48], fade_str[48];
+        snprintf(adc_str, sizeof(adc_str), "ADC_V2mA: %.2f", current_settings.adc_v_to_mA);
+        snprintf(dac_str, sizeof(dac_str), "DAC коды/мА: %.0f", current_settings.dac_code_to_mA);
+        snprintf(fade_str, sizeof(fade_str), "Плавный пуск: %.0fс", current_settings.fade_duration_sec);
+        const char* choices[] = { "<-Назад", adc_str, dac_str, fade_str, "СБРОС на заводские" };
+        renderMenu("ОБЩИЕ НАСТРОЙКИ", choices, 5, menu_selected);
       }
       break;
       
@@ -306,8 +335,16 @@ void renderCurrentScreen() {
         extern uint32_t session_elapsed_sec;
         uint32_t mins = session_elapsed_sec / 60;
         uint32_t secs = session_elapsed_sec % 60;
-        snprintf(info_str, sizeof(info_str), "%.1fmA %u:%02u", 
-                 current_settings.amplitude_mA, mins, secs);
+        
+        // Выбираем амплитуду в зависимости от режима
+        float amplitude = DEF_AMPLITUDE_MA;  // дефолт из config.h
+        switch (current_settings.mode) {
+          case MODE_TRNS: amplitude = current_settings.amplitude_tRNS_mA; break;
+          case MODE_TDCS: amplitude = current_settings.amplitude_tDCS_mA; break;
+          case MODE_TACS: amplitude = current_settings.amplitude_tACS_mA; break;
+        }
+        
+        snprintf(info_str, sizeof(info_str), "%.1fmA %u:%02u", amplitude, mins, secs);
         u8g2.setCursor(10, 47);
         u8g2.print(info_str);
         u8g2.sendBuffer();
@@ -325,8 +362,4 @@ void setDisplayStatus(const char* status) {
   }
 }
 
-void resetDisplayTimer() {
-  timer_start_ms = millis();
-  refreshDisplay();
-}
 

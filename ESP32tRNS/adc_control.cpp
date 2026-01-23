@@ -1,4 +1,6 @@
 #include "adc_control.h"
+#include "session_control.h"
+#include "dac_control.h"  // для dynamic_dac_gain
 
 // Глобальные переменные
 adc_continuous_handle_t adc_handle = NULL;
@@ -14,6 +16,7 @@ static uint32_t adc_capture_resume_ms = 0;
 static int16_t ma_buffer[3] = {0, 0, 0};  // Кольцевой буфер на 3 элемента
 static uint8_t ma_index = 0;              // Позиция записи
 static float ma_avg = 0.0f;               // Текущее среднее
+static uint32_t last_sign_warn_ms = 0;
 
 // Вспомогательная функция для сброса буфера ADC в запрещенное значение
 static void resetADCRingBufferInternal() {
@@ -109,17 +112,17 @@ void initADC() {
   // Настройка паттерна: 2 канала (sign + magnitude) синхронно
   adc_digi_pattern_config_t adc_pattern[2];
   
-  // Канал 0: знак (sign)
-  adc_pattern[0].atten = ADC_ATTEN;
+  // Канал 0: знак (sign) - всегда 0-3.3V
+  adc_pattern[0].atten = ADC_ATTEN_DB_11;
   adc_pattern[0].channel = ADC_SIGN_CHANNEL;
   adc_pattern[0].unit = ADC_UNIT;
-  adc_pattern[0].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;  // 12-bit
+  adc_pattern[0].bit_width = ADC_BITWIDTH;  // Из config.h (10 бит — меньше шума)
   
-  // Канал 1: модуль (magnitude)
-  adc_pattern[1].atten = ADC_ATTEN;
+  // Канал 1: модуль (magnitude) - настраиваемый диапазон
+  adc_pattern[1].atten = ADC_MOD_ATTEN;
   adc_pattern[1].channel = ADC_MOD_CHANNEL;
   adc_pattern[1].unit = ADC_UNIT;
-  adc_pattern[1].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;  // 12-bit
+  adc_pattern[1].bit_width = ADC_BITWIDTH;  // Из config.h (10 бит — меньше шума)
   
   adc_continuous_config_t dig_cfg = {
     .pattern_num = 2,  // 2 канала!
@@ -186,7 +189,7 @@ void readADCFromDMA() {
       if (has_sign && has_mag) {
         // Определяем знак: если sign > порога, то положительный
         bool is_positive = (sign_value > ADC_SIGN_THRESHOLD);
-        
+
         // Применяем инверсию полярности (если электроды перепутаны)
         #if POLARITY_INVERT
           is_positive = !is_positive;
@@ -235,8 +238,8 @@ void printADCStats() {
   // Вычисляем статистику знаковых значений (пропускаем запрещенные)
   int32_t sum = 0;
   uint32_t valid_count = 0;
-  int16_t min_val = 4095;
-  int16_t max_val = -4095;
+  int16_t min_val = ADC_MAX_VALUE;
+  int16_t max_val = -ADC_MAX_VALUE;
   
   for (uint32_t i = 0; i < ADC_RING_SIZE; i++) {
     if (adc_ring_buffer[i] == ADC_INVALID_VALUE) continue;
@@ -253,10 +256,10 @@ void printADCStats() {
   
   // Среднее и размах знакового сигнала
   int16_t avg = sum / valid_count;
-  // Конвертация в напряжение: знаковый ADC [-4095, +4095] → [-ADC_MAX_VOLTAGE, +ADC_MAX_VOLTAGE]
-  float voltage_avg = (avg / 4095.0f) * ADC_MAX_VOLTAGE;
-  float voltage_min = (min_val / 4095.0f) * ADC_MAX_VOLTAGE;
-  float voltage_max = (max_val / 4095.0f) * ADC_MAX_VOLTAGE;
+  // Конвертация в напряжение: знаковый ADC → [-ADC_MAX_VOLTAGE, +ADC_MAX_VOLTAGE]
+  float voltage_avg = (avg / (float)ADC_MAX_VALUE) * ADC_MAX_VOLTAGE;
+  float voltage_min = (min_val / (float)ADC_MAX_VALUE) * ADC_MAX_VOLTAGE;
+  float voltage_max = (max_val / (float)ADC_MAX_VALUE) * ADC_MAX_VOLTAGE;
 }
 
 // Получить минимальное и максимальное напряжение с ADC (в вольтах)
@@ -289,8 +292,8 @@ bool getADCMinMaxVoltage(float* min_voltage, float* max_voltage) {
   free(temp_buffer);
   
   // Конвертация знакового ADC в напряжение
-  *min_voltage = (min_val / 4095.0f) * ADC_MAX_VOLTAGE;
-  *max_voltage = (max_val / 4095.0f) * ADC_MAX_VOLTAGE;
+  *min_voltage = (min_val / (float)ADC_MAX_VALUE) * ADC_MAX_VOLTAGE;
+  *max_voltage = (max_val / (float)ADC_MAX_VALUE) * ADC_MAX_VOLTAGE;
   return true;
 }
 
@@ -366,7 +369,7 @@ bool getADCPercentiles(float* p1_voltage, float* p99_voltage, float* mean_voltag
     sum += temp_buffer[i];
   }
   // Конвертация знакового ADC в напряжение
-  *mean_voltage = (float)((sum / valid_count / 4095.0) * ADC_MAX_VOLTAGE);
+  *mean_voltage = (float)((sum / valid_count / (double)ADC_MAX_VALUE) * ADC_MAX_VOLTAGE);
   
   uint32_t p1_index = valid_count / 100;
   uint32_t p99_index = (valid_count * 99) / 100;
@@ -383,8 +386,8 @@ bool getADCPercentiles(float* p1_voltage, float* p99_voltage, float* mean_voltag
     int16_t p99_val = quickselect(temp_p99, 0, valid_count - 1, p99_index);
     
     // Конвертация знакового ADC в напряжение
-    *p1_voltage = (p1_val / 4095.0f) * ADC_MAX_VOLTAGE;
-    *p99_voltage = (p99_val / 4095.0f) * ADC_MAX_VOLTAGE;
+    *p1_voltage = (p1_val / (float)ADC_MAX_VALUE) * ADC_MAX_VOLTAGE;
+    *p99_voltage = (p99_val / (float)ADC_MAX_VALUE) * ADC_MAX_VOLTAGE;
     
     free(temp_p1);
     free(temp_p99);
@@ -397,8 +400,8 @@ bool getADCPercentiles(float* p1_voltage, float* p99_voltage, float* mean_voltag
       if (temp_buffer[i] > max_val) max_val = temp_buffer[i];
     }
     // Конвертация знакового ADC в напряжение
-    *p1_voltage = (min_val / 4095.0f) * ADC_MAX_VOLTAGE;
-    *p99_voltage = (max_val / 4095.0f) * ADC_MAX_VOLTAGE;
+    *p1_voltage = (min_val / (float)ADC_MAX_VALUE) * ADC_MAX_VOLTAGE;
+    *p99_voltage = (max_val / (float)ADC_MAX_VALUE) * ADC_MAX_VOLTAGE;
     
     if (temp_p1 != NULL) free(temp_p1);
     if (temp_p99 != NULL) free(temp_p99);
@@ -440,8 +443,10 @@ bool buildADCHistogram(uint16_t* bins, uint8_t num_bins) {
   
   // Для sign-magnitude архитектуры гистограмма строится по реальным min/max
   if (min_val == max_val) {
+    // Все значения одинаковые (например, tDCS) - все в средний столбец
+    bins[num_bins / 2] = valid_count;
     free(temp_buffer);
-    return false;
+    return true;  // Это валидные данные!
   }
   
   float range = max_val - min_val;

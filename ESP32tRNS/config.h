@@ -66,9 +66,9 @@
 
 // Аттенюатор ADC
 // ЗНАК (SIGN) всегда читаем в диапазоне 0-3.3V
-// МОДУЛЬ (MOD) настраиваем: 0-1.1V (боевой) или 0-3.3V (тестовый)
-#define ADC_MOD_ATTEN        ADC_ATTEN_DB_11  // Меняй на DB_0 для боевого режима
-#define ADC_MAX_VOLTAGE      ((ADC_MOD_ATTEN == ADC_ATTEN_DB_0) ? 1.1f : 3.3f)
+// МОДУЛЬ (MOD) настраиваем: 0-3.3V
+#define ADC_MOD_ATTEN        ADC_ATTEN_DB_11  
+#define ADC_MAX_VOLTAGE      3.3f
 
 // Конвертация ADC кодов в напряжение и ток (коэффициент ADC_V_TO_MA теперь в SessionSettings)
 #define ADC_CAPTURE_DELAY_MS 300     // Задержка запуска записи ADC после старта DAC (мс)

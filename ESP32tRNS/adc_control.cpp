@@ -145,6 +145,11 @@ void initADC() {
 
 }
 
+// DEBUG: для логгирования ADC раз в секунду
+static uint32_t adc_log_time = 0;
+static uint16_t adc_log_sign = 0;
+static uint16_t adc_log_mag = 0;
+
 // Чтение данных из ADC DMA и добавление в кольцевой буфер
 void readADCFromDMA() {
   uint8_t dma_buffer[ADC_FRAME_SIZE * SOC_ADC_DIGI_DATA_BYTES_PER_CONV];
@@ -154,6 +159,12 @@ void readADCFromDMA() {
   if (adc_capture_pending && now_ms >= adc_capture_resume_ms) {
     adc_capture_pending = false;
     adc_capture_enabled = true;
+  }
+  
+  // DEBUG: лог раз в секунду
+  if (now_ms - adc_log_time >= 1000) {
+    adc_log_time = now_ms;
+    Serial.printf("[ADC] sign=%u mag=%u\n", adc_log_sign, adc_log_mag);
   }
   
   // Читаем из DMA (неблокирующе с timeout)
@@ -179,9 +190,11 @@ void readADCFromDMA() {
       // Собираем пару (sign, magnitude)
       if (chan_num == ADC_SIGN_CHANNEL) {
         sign_value = data;
+        adc_log_sign = data;  // для лога
         has_sign = true;
       } else if (chan_num == ADC_MOD_CHANNEL) {
         mag_value = data;
+        adc_log_mag = data;  // для лога
         has_mag = true;
       }
       

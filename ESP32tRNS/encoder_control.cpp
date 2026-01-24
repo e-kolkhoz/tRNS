@@ -4,71 +4,72 @@
 // Объект энкодера из библиотеки EncButton
 // Параметры: S1, S2, KEY
 static EncButton enc(ENC_S1, ENC_S2, ENC_KEY);
-static volatile bool enc_button_irq = false;
-static volatile uint32_t last_button_irq_us = 0;
-static uint32_t last_button_us = 0;
 
-// ISR функция для обработки прерываний от энкодера
+// Защита от дребезга кнопки — ЕДИНСТВЕННЫЙ механизм
+static volatile uint32_t last_button_time_ms = 0;
+static const uint32_t BUTTON_DEBOUNCE_MS = 300;  // 300мс между кликами — надёжно!
+
+// Флаг клика (из ISR в loop)
+static volatile bool pending_click = false;
+
+// ISR функция для обработки прерываний от энкодера (вращение)
 void IRAM_ATTR encoderISR() {
-  enc.tickISR();  // Специальный метод для ISR - быстрый опрос
+  enc.tickISR();
 }
 
-// ISR для кнопки энкодера (фиксируем событие, обработка в loop)
+// ISR для кнопки — ТОЛЬКО устанавливает флаг, debounce в loop!
 void IRAM_ATTR encoderKeyISR() {
-  uint32_t now_us = micros();
-  // Жёсткий debounce в ISR — увеличен, т.к. loop() теперь быстрее
-  if (now_us - last_button_irq_us > 100000) {  // 100мс
-    last_button_irq_us = now_us;
-    enc_button_irq = true;
-  }
+  pending_click = true;
 }
 
 // Инициализация энкодера
 void initEncoder() {
-  // Библиотека EncButton сама настраивает пины как INPUT_PULLUP
-  
   // Настройка типа энкодера
-  enc.setEncType(EB_STEP4_LOW);  // Можно попробовать EB_STEP2 или EB_STEP1
+  enc.setEncType(EB_STEP4_LOW);
   
-  // Уменьшаем debounce для более отзывчивой кнопки (по умолчанию 50мс)
-  enc.setDebTimeout(20);  // 20мс debounce
-  enc.setClickTimeout(300);  // Таймаут клика 300мс
+  // Debounce для вращения
+  enc.setDebTimeout(30);
+  enc.setClickTimeout(400);
   
-  // ВАЖНО: Подключаем прерывания к пинам энкодера (вращение)
+  // Прерывания для вращения
   attachInterrupt(digitalPinToInterrupt(ENC_S1), encoderISR, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENC_S2), encoderISR, CHANGE);
 
-  // Кнопку обрабатываем своим ISR (чтобы не терять клики во время рендера)
+  // Кнопка с прерыванием
   pinMode(ENC_KEY, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(ENC_KEY), encoderKeyISR, FALLING);
+  
+  last_button_time_ms = millis();
 }
 
 // Опрос энкодера (вызывать в loop)
 void updateEncoder() {
-  // ВАЖНО: tick() нужен для обработки КНОПКИ!
-  // Вращение обрабатывается в ISR через tickISR()
   enc.tick();
   
   // === Вращение ===
   if (enc.left()) {
-    Serial.println("[ENC] Rotate LEFT");
-    handleRotate(+1);  // По часовой = +1
+    handleRotate(+1);
   }
   if (enc.right()) {
-    Serial.println("[ENC] Rotate RIGHT");
-    handleRotate(-1);  // Против часовой = -1
+    handleRotate(-1);
   }
   
-  // === Клик кнопки ===
-  if (enc_button_irq) {
-    uint32_t now_us = micros();
-    if (now_us - last_button_us > 150000) {  // 150мс debounce — loop теперь быстрее
-      last_button_us = now_us;
-      enc_button_irq = false;
-      Serial.println("[ENC] Button CLICK detected!");
-      handleClick();
-    } else {
-      enc_button_irq = false;  // Сбрасываем ложный клик
+  // === Клик кнопки — ЕДИНСТВЕННЫЙ debounce здесь ===
+  if (pending_click) {
+    // СРАЗУ сбрасываем флаг (атомарно)
+    pending_click = false;
+    
+    uint32_t now_ms = millis();
+    uint32_t elapsed = now_ms - last_button_time_ms;
+    
+    // Проверяем debounce
+    if (elapsed >= BUTTON_DEBOUNCE_MS) {
+      // Дополнительная проверка: кнопка РЕАЛЬНО нажата?
+      if (digitalRead(ENC_KEY) == LOW) {
+        last_button_time_ms = now_ms;
+        Serial.printf("[ENC] CLICK! (elapsed=%lu ms)\n", elapsed);
+        handleClick();
+      }
     }
   }
 }

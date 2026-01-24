@@ -66,9 +66,15 @@ void setup() {
   // Шаг 3: Инициализация ADC DMA
   showBootScreen("Init ADC DMA...");
   Serial.println("[BOOT] initADC()");
+  Serial.flush();
   initADC();
+  Serial.println("[BOOT] initADC() OK");
+  Serial.flush();
+  delay(100);  // Даём ADC DMA стабилизироваться
 
   // Шаг 4: Выделение памяти под DAC сигнал
+  Serial.println("[BOOT] showBootScreen Allocate DAC...");
+  Serial.flush();
   showBootScreen("Allocate DAC...");
   Serial.println("[BOOT] allocate signal buffer");
   signal_buffer = (int16_t*)malloc(SIGNAL_SAMPLES * sizeof(int16_t));

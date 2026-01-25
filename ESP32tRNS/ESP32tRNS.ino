@@ -18,9 +18,11 @@
 // - loop() свободен для USB OTG команд от Android
 // - Кольцевые буферы для непрерывного сбора данных
 
+#include <EEPROM.h>
 #include "config.h"
 #include "dac_control.h"
 #include "adc_control.h"
+#include "adc_calibration.h"
 #include "display_control.h"
 #include "preset_storage.h"
 #include "encoder_control.h"
@@ -43,6 +45,15 @@ void setup() {
   Serial.begin(921600);
   Serial.setRxBufferSize(40960);  // Увеличиваем RX буфер до 40KB (для CMD_SET_DAC)
   delay(100);
+  
+  // EEPROM.begin() ПЕРВЫМ — до любых malloc, иначе NVS может зависнуть!
+  Serial.println("[BOOT] EEPROM.begin()");
+  if (!EEPROM.begin(512)) {
+    Serial.println("[BOOT] EEPROM FAILED!");
+  } else {
+    Serial.println("[BOOT] EEPROM OK");
+  }
+  
   // ============================================================
   // === BOOT SEQUENCE с отображением на OLED ===
   // ============================================================
@@ -154,6 +165,21 @@ void loop() {
 
   // 5. Обновляем OLED дисплей (неблокирующе, с ограничением частоты)
   updateDisplay();
+  
+  // DEBUG: 50 отсчётов ADC в mA (раз в 2 сек во время сеанса)
+  //static uint32_t last_dump = 0;
+  //if (current_state != STATE_IDLE && millis() - last_dump > 2000) {
+  //  Serial.println("--- ADC mA ---");
+  //  uint32_t idx = adc_write_index;
+  //  for (int i = 0; i < 50; i++) {
+  //    int16_t raw = adc_ring_buffer[(idx + i) % ADC_RING_SIZE];
+  //    if (raw != ADC_INVALID_VALUE) {
+  //      float mA = adcSignedToMilliamps(raw);
+  //      Serial.println(mA, 3);
+  //    }
+  //  }
+  //  last_dump = millis();
+  //}
   
   // БЕЗ DELAY - loop должен крутиться максимально быстро для отзывчивости!
 }

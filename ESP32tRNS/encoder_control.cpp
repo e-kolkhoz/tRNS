@@ -48,10 +48,10 @@ void updateEncoder() {
   
   // === Вращение ===
   if (enc.left()) {
-    handleRotate(+1);
+    handleRotate(+1 * ENC_DIRECTION);
   }
   if (enc.right()) {
-    handleRotate(-1);
+    handleRotate(-1 * ENC_DIRECTION);
   }
   
   // === Клик кнопки — ЕДИНСТВЕННЫЙ debounce здесь ===

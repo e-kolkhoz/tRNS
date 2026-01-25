@@ -63,8 +63,8 @@ void handleRotate(int8_t delta) {
       break;
       
     case SCR_SETTINGS_MENU:
-      // Общие настройки: 5 опций (0-4)
-      menu_selected = constrain(menu_selected - delta, 0, 4);
+      // Общие настройки: 4 опции (0-3)
+      menu_selected = constrain(menu_selected - delta, 0, 3);
       break;
       
     case SCR_EDITOR:
@@ -266,28 +266,23 @@ void executeSessionMenuChoice(StimMode mode) {
 void executeSettingsMenuChoice() {
   // Структура меню:
   // 0: Назад
-  // 1: ADC_V2mA
-  // 2: DAC_Code2mA
-  // 3: Плавный пуск, с
-  // 4: Сбросить на заводские
+  // 1: DAC_Code2mA
+  // 2: Плавный пуск, с
+  // 3: Сбросить на заводские
   
   switch (menu_selected) {
     case 0:  // Назад
       popScreen();
       break;
-    case 1:  // ADC_V2mA
-      openEditor("ADC_V2mA", &current_settings.adc_v_to_mA, 
-                 ADC_V_TO_MA_INCREMENT, MIN_ADC_V_TO_MA, MAX_ADC_V_TO_MA, false);
-      break;
-    case 2:  // DAC_Code2mA
+    case 1:  // DAC_Code2mA
       openEditor("DAC_Code2mA", &current_settings.dac_code_to_mA, 
                  DAC_CODE_TO_MA_INCREMENT, MIN_DAC_CODE_TO_MA, MAX_DAC_CODE_TO_MA, false);
       break;
-    case 3:  // Плавный пуск, с
+    case 2:  // Плавный пуск, с
       openEditor("Плавн.пуск,с", &current_settings.fade_duration_sec, 
                  FADE_DURATION_INCREMENT, MIN_FADE_DURATION_SEC, MAX_FADE_DURATION_SEC, false);
       break;
-    case 4:  // Сбросить на заводские
+    case 3:  // Сбросить на заводские
       resetToDefaults();
       popScreen();  // Вернуться в главное меню
       break;

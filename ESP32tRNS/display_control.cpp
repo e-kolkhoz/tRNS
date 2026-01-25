@@ -1,6 +1,7 @@
 #include "display_control.h"
 #include "dac_control.h"
 #include "adc_control.h"
+#include "adc_calibration.h"
 #include "menu_control.h"
 #include "session_control.h"
 #include <Wire.h>
@@ -122,17 +123,16 @@ void refreshDisplay() {
   u8g2.setFont(u8g2_font_6x12_t_cyrillic);
   
   // === СТРОКА 2: Перцентили и среднее ADC ===
-  float p1_v = 0.0f, p99_v = 0.0f, mean_v = 0.0f;
-  bool adc_valid = getADCPercentiles(&p1_v, &p99_v, &mean_v);
+  int16_t p1_raw = 0, p99_raw = 0, mean_raw = 0;
+  bool adc_valid = getADCPercentilesRaw(&p1_raw, &p99_raw, &mean_raw);
   
   if (adc_valid) {
     char stats_str[32];
-    // Напряжения уже знаковые (sign-magnitude реконструкция)
-    // Используем калибровочный коэффициент из настроек
-    float p1_mA = p1_v * current_settings.adc_v_to_mA;
-    float mean_mA = mean_v * current_settings.adc_v_to_mA;
-    float p99_mA = p99_v * current_settings.adc_v_to_mA;
     
+    // Пересчёт через калибровочную таблицу
+    float p1_mA = adcSignedToMilliamps(p1_raw);
+    float mean_mA = adcSignedToMilliamps(mean_raw);
+    float p99_mA = adcSignedToMilliamps(p99_raw);
 
     snprintf(stats_str, sizeof(stats_str), "%.1f > %.1f < %.1f", p1_mA, mean_mA, p99_mA);
     u8g2.setFont(u8g2_font_7x13_t_cyrillic);
@@ -300,12 +300,11 @@ void renderCurrentScreen() {
       
     case SCR_SETTINGS_MENU:
       {
-        static char adc_str[48], dac_str[48], fade_str[48];
-        snprintf(adc_str, sizeof(adc_str), "ADC_V2mA: %.2f", current_settings.adc_v_to_mA);
+        static char dac_str[48], fade_str[48];
         snprintf(dac_str, sizeof(dac_str), "DAC коды/мА: %.0f", current_settings.dac_code_to_mA);
         snprintf(fade_str, sizeof(fade_str), "Плавный пуск: %.0fс", current_settings.fade_duration_sec);
-        const char* choices[] = { "<-Назад", adc_str, dac_str, fade_str, "СБРОС на заводские" };
-        renderMenu("ОБЩИЕ НАСТРОЙКИ", choices, 5, menu_selected);
+        const char* choices[] = { "<-Назад", dac_str, fade_str, "СБРОС на заводские" };
+        renderMenu("ОБЩИЕ НАСТРОЙКИ", choices, 4, menu_selected);
       }
       break;
       

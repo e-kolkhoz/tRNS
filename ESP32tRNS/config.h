@@ -32,6 +32,7 @@
 #define ENC_S1      18
 #define ENC_S2      16
 #define ENC_KEY     39
+#define ENC_DIRECTION (-1)  // +1 или -1 для инверсии направления
 
 // --- I2S → PCM5102A (стерео DAC) ---
 #define I2S_BCLK    33  // BCK (Bit clock) PCM5102A
@@ -81,7 +82,7 @@
 // Кольцевой буфер для накопления данных
 // ВАЖНО: Буфер согласован с DAC лупом (2.048 сек)! 
 // ADC = 1× DAC луп → квадратное окно без растекания спектра
-#define ADC_RING_SIZE       40960  // 2.048 сек @ 20kHz = 1× DAC луп (16384 @ 8kHz)
+#define ADC_RING_SIZE       16384  // ~2 сек @ 8kHz
 #define ADC_INVALID_VALUE   -32768 // Запрещенное значение (метка "данных ещё нет")
 
 // === DAC SIGNAL PARAMETERS (Sign-Magnitude для H-моста) ===
@@ -109,7 +110,7 @@
 #define DEF_TACS_FREQUENCY_HZ   140.0f  // Частота tACS по умолчанию (Гц)
 
 // === ДЕФОЛТНЫЕ КАЛИБРОВОЧНЫЕ КОЭФФИЦИЕНТЫ ===
-#define DEF_ADC_V_TO_MA         0.8f   // ADC: вольты → мА
+// ADC калибровка через таблицу в adc_calibration.cpp
 #define DEF_DAC_CODE_TO_MA      11000.0f  // DAC: коды/мА (1В=1мА, ~10000 кодов)
 
 // === ПРЕДЕЛЫ НАСТРОЙКИ ПАРАМЕТРОВ (для редактора) ===
@@ -127,11 +128,6 @@
 #define MIN_DURATION_MIN        1.0f
 #define MAX_DURATION_MIN        60.0f
 #define DURATION_INCREMENT_MIN  1.0f
-
-// Калибровка ADC
-#define MIN_ADC_V_TO_MA         0.1f
-#define MAX_ADC_V_TO_MA         100.0f
-#define ADC_V_TO_MA_INCREMENT   0.1f
 
 // Калибровка DAC (коды/мА)
 #define MIN_DAC_CODE_TO_MA      1000.0f

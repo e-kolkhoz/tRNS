@@ -15,7 +15,7 @@ static uint32_t session_start_time = 0;     // Время старта теку�
 
 // EEPROM адреса
 #define EEPROM_SIZE 512
-#define EEPROM_MAGIC 0xA5C3  // Магическое число для проверки валидности
+#define EEPROM_MAGIC 0xA5C4  // v2: ADC калибровка через таблицу
 #define EEPROM_ADDR_MAGIC 0
 #define EEPROM_ADDR_SETTINGS 2
 
@@ -32,7 +32,6 @@ static const SessionSettings default_settings = {
   .frequency_tACS_Hz = DEF_TACS_FREQUENCY_HZ,
   
   // Общие настройки (заводские из config.h)
-  .adc_v_to_mA = DEF_ADC_V_TO_MA,
   .dac_code_to_mA = DEF_DAC_CODE_TO_MA,
   .fade_duration_sec = DEF_FADE_DURATION_SEC
 };
@@ -40,11 +39,7 @@ static const SessionSettings default_settings = {
 // === ИНИЦИАЛИЗАЦИЯ ===
 void initSession() {
   Serial.println("[SESSION] initSession() begin");
-  if (!EEPROM.begin(EEPROM_SIZE)) {
-    Serial.println("[SESSION] EEPROM.begin FAILED");
-  } else {
-    Serial.println("[SESSION] EEPROM.begin OK");
-  }
+  // EEPROM.begin() уже вызван в setup() до аллокации буферов!
   loadSettings();
   current_state = STATE_IDLE;
   Serial.println("[SESSION] initSession() done");
@@ -52,21 +47,17 @@ void initSession() {
 
 // === EEPROM ===
 void loadSettings() {
-  Serial.println("[SESSION] loadSettings()");
   uint16_t magic = EEPROM.readUShort(EEPROM_ADDR_MAGIC);
   
   if (magic == EEPROM_MAGIC) {
-    // EEPROM валиден - загружаем
     EEPROM.get(EEPROM_ADDR_SETTINGS, current_settings);
-    Serial.println("[SESSION] EEPROM valid, settings loaded");
+    Serial.println("[SESSION] Settings loaded from EEPROM");
   } else {
-    // EEPROM пуст - используем дефолт БЕЗ сохранения
     current_settings = default_settings;
-    // saveSettings() вызовется при первом изменении настроек
-    Serial.println("[SESSION] EEPROM empty, defaults applied");
+    Serial.println("[SESSION] Using default settings");
   }
 
-  // Валидация калибровки DAC (коды/мА)
+  // Валидация
   if (current_settings.dac_code_to_mA < MIN_DAC_CODE_TO_MA ||
       current_settings.dac_code_to_mA > MAX_DAC_CODE_TO_MA) {
     current_settings.dac_code_to_mA = DEF_DAC_CODE_TO_MA;
@@ -273,6 +264,8 @@ void updateSession() {
         // Проверка перехода в IDLE при достижении 0.0
         if (dynamic_dac_gain <= 0.0f) {
           dynamic_dac_gain = 0.0f;  // Насыщение
+          // Сохраняем фактическое время сеанса ПЕРЕД переходом в IDLE!
+          session_elapsed_sec = (millis() - session_timer_start_ms) / 1000;
           current_state = STATE_IDLE;
           // Останавливаем DAC в idle, чтобы не было мусора
           stopDacPlayback();

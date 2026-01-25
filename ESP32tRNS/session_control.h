@@ -37,7 +37,7 @@ struct SessionSettings {
   float frequency_tACS_Hz;         // Частота для tACS 
   
   // Общие настройки (калибровка)
-  float adc_v_to_mA;               // ADC: вольты → мА (по умолчанию 10.0)
+  // ADC калибровка теперь через таблицу в adc_calibration.cpp
   float dac_code_to_mA;            // DAC: код → мА (по умолчанию 0.375)
   float fade_duration_sec;         // Длительность fadein/fadeout (секунды)
 };

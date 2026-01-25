@@ -145,11 +145,6 @@ void initADC() {
 
 }
 
-// DEBUG: для логгирования ADC раз в секунду
-static uint32_t adc_log_time = 0;
-static uint16_t adc_log_sign = 0;
-static uint16_t adc_log_mag = 0;
-
 // Чтение данных из ADC DMA и добавление в кольцевой буфер
 void readADCFromDMA() {
   uint8_t dma_buffer[ADC_FRAME_SIZE * SOC_ADC_DIGI_DATA_BYTES_PER_CONV];
@@ -159,12 +154,6 @@ void readADCFromDMA() {
   if (adc_capture_pending && now_ms >= adc_capture_resume_ms) {
     adc_capture_pending = false;
     adc_capture_enabled = true;
-  }
-  
-  // DEBUG: лог раз в секунду
-  if (now_ms - adc_log_time >= 1000) {
-    adc_log_time = now_ms;
-    Serial.printf("[ADC] sign=%u mag=%u\n", adc_log_sign, adc_log_mag);
   }
   
   // Читаем из DMA (неблокирующе с timeout)
@@ -190,11 +179,9 @@ void readADCFromDMA() {
       // Собираем пару (sign, magnitude)
       if (chan_num == ADC_SIGN_CHANNEL) {
         sign_value = data;
-        adc_log_sign = data;  // для лога
         has_sign = true;
       } else if (chan_num == ADC_MOD_CHANNEL) {
         mag_value = data;
-        adc_log_mag = data;  // для лога
         has_mag = true;
       }
       
@@ -424,6 +411,70 @@ bool getADCPercentiles(float* p1_voltage, float* p99_voltage, float* mean_voltag
   return true;
 }
 
+// Получить перцентили (1%, 99%) и среднее в RAW ADC кодах (знаковые!)
+bool getADCPercentilesRaw(int16_t* p1_raw, int16_t* p99_raw, int16_t* mean_raw) {
+  if (p1_raw == NULL || p99_raw == NULL || mean_raw == NULL) {
+    return false;
+  }
+  
+  uint32_t window = getStatsWindowSize();
+  int16_t* temp_buffer = (int16_t*)malloc(window * sizeof(int16_t));
+  if (temp_buffer == NULL) {
+    return false;
+  }
+  
+  uint32_t valid_count = collectRecentSamples(temp_buffer, window);
+  if (valid_count == 0) {
+    free(temp_buffer);
+    *p1_raw = 0;
+    *p99_raw = 0;
+    *mean_raw = 0;
+    return false;
+  }
+  
+  // Среднее
+  int32_t sum = 0;
+  for (uint32_t i = 0; i < valid_count; i++) {
+    sum += temp_buffer[i];
+  }
+  *mean_raw = (int16_t)(sum / (int32_t)valid_count);
+  
+  // Перцентили
+  uint32_t p1_index = valid_count / 100;
+  uint32_t p99_index = (valid_count * 99) / 100;
+  if (p1_index >= valid_count) p1_index = 0;
+  if (p99_index >= valid_count) p99_index = valid_count - 1;
+  
+  int16_t* temp_p1 = (int16_t*)malloc(valid_count * sizeof(int16_t));
+  int16_t* temp_p99 = (int16_t*)malloc(valid_count * sizeof(int16_t));
+  if (temp_p1 != NULL && temp_p99 != NULL) {
+    memcpy(temp_p1, temp_buffer, valid_count * sizeof(int16_t));
+    memcpy(temp_p99, temp_buffer, valid_count * sizeof(int16_t));
+    
+    *p1_raw = quickselect(temp_p1, 0, valid_count - 1, p1_index);
+    *p99_raw = quickselect(temp_p99, 0, valid_count - 1, p99_index);
+    
+    free(temp_p1);
+    free(temp_p99);
+  } else {
+    // Fallback на min/max
+    int16_t min_val = temp_buffer[0];
+    int16_t max_val = temp_buffer[0];
+    for (uint32_t i = 1; i < valid_count; i++) {
+      if (temp_buffer[i] < min_val) min_val = temp_buffer[i];
+      if (temp_buffer[i] > max_val) max_val = temp_buffer[i];
+    }
+    *p1_raw = min_val;
+    *p99_raw = max_val;
+    
+    if (temp_p1 != NULL) free(temp_p1);
+    if (temp_p99 != NULL) free(temp_p99);
+  }
+  
+  free(temp_buffer);
+  return true;
+}
+
 // Построить гистограмму из ADC данных
 bool buildADCHistogram(uint16_t* bins, uint8_t num_bins) {
   if (bins == NULL || num_bins == 0) {
@@ -479,5 +530,21 @@ void scheduleADCCaptureStart(uint32_t delay_ms) {
   adc_capture_enabled = false;
   adc_capture_pending = true;
   adc_capture_resume_ms = millis() + delay_ms;
+}
+
+// Вывод буфера в Serial для Arduino Plotter
+void dumpADCToSerial(uint16_t decimation) {
+  if (decimation == 0) decimation = 1;
+  
+  uint32_t write_idx = adc_write_index;  // Снимок текущей позиции
+  
+  // Выводим от старых к новым (по кругу от write_idx)
+  for (uint32_t i = 0; i < ADC_RING_SIZE; i += decimation) {
+    uint32_t idx = (write_idx + i) % ADC_RING_SIZE;
+    int16_t val = adc_ring_buffer[idx];
+    if (val != ADC_INVALID_VALUE) {
+      Serial.println(val);
+    }
+  }
 }
 

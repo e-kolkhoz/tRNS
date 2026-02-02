@@ -63,8 +63,8 @@ void handleRotate(int8_t delta) {
       break;
       
     case SCR_SETTINGS_MENU:
-      // Общие настройки: 4 опции (0-3)
-      menu_selected = constrain(menu_selected - delta, 0, 3);
+      // Общие настройки: 6 опций (0-5)
+      menu_selected = constrain(menu_selected - delta, 0, 5);
       break;
       
     case SCR_EDITOR:
@@ -268,7 +268,9 @@ void executeSettingsMenuChoice() {
   // 0: Назад
   // 1: DAC_Code2mA
   // 2: Плавный пуск, с
-  // 3: Сбросить на заводские
+  // 3: Полярность: toggle
+  // 4: Энкодер: toggle
+  // 5: Сбросить на заводские
   
   switch (menu_selected) {
     case 0:  // Назад
@@ -282,7 +284,15 @@ void executeSettingsMenuChoice() {
       openEditor("Плавн.пуск,с", &current_settings.fade_duration_sec, 
                  FADE_DURATION_INCREMENT, MIN_FADE_DURATION_SEC, MAX_FADE_DURATION_SEC, false);
       break;
-    case 3:  // Сбросить на заводские
+    case 3:  // Полярность: toggle
+      current_settings.polarity_invert = !current_settings.polarity_invert;
+      saveSettings();
+      break;
+    case 4:  // Энкодер: toggle
+      current_settings.enc_direction_invert = !current_settings.enc_direction_invert;
+      saveSettings();
+      break;
+    case 5:  // Сбросить на заводские
       resetToDefaults();
       popScreen();  // Вернуться в главное меню
       break;

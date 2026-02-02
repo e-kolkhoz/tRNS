@@ -1,4 +1,5 @@
 #include "adc_control.h"
+#include "adc_calibration.h"
 #include "session_control.h"
 #include "dac_control.h"  // для dynamic_dac_gain
 
@@ -191,9 +192,9 @@ void readADCFromDMA() {
         bool is_positive = (sign_value > ADC_SIGN_THRESHOLD);
 
         // Применяем инверсию полярности (если электроды перепутаны)
-        #if POLARITY_INVERT
+        if (current_settings.polarity_invert) {
           is_positive = !is_positive;
-        #endif
+        }
         
         // Реконструируем знаковый сигнал
         int16_t signed_value = is_positive ? (int16_t)mag_value : -(int16_t)mag_value;
@@ -498,24 +499,26 @@ bool buildADCHistogram(uint16_t* bins, uint8_t num_bins) {
     return false;
   }
   
-  int16_t min_val = temp_buffer[0];
-  int16_t max_val = temp_buffer[0];
+  // Преобразуем в mA через калибровку и находим min/max
+  float min_mA = adcSignedToMilliamps(temp_buffer[0]);
+  float max_mA = min_mA;
   for (uint32_t i = 1; i < valid_count; i++) {
-    if (temp_buffer[i] < min_val) min_val = temp_buffer[i];
-    if (temp_buffer[i] > max_val) max_val = temp_buffer[i];
+    float mA = adcSignedToMilliamps(temp_buffer[i]);
+    if (mA < min_mA) min_mA = mA;
+    if (mA > max_mA) max_mA = mA;
   }
   
-  // Для sign-magnitude архитектуры гистограмма строится по реальным min/max
-  if (min_val == max_val) {
-    // Все значения одинаковые (например, tDCS) - все в средний столбец
+  // Все значения одинаковые (например, tDCS) - все в средний столбец
+  if (max_mA - min_mA < 0.001f) {
     bins[num_bins / 2] = valid_count;
     free(temp_buffer);
-    return true;  // Это валидные данные!
+    return true;
   }
   
-  float range = max_val - min_val;
+  float range = max_mA - min_mA;
   for (uint32_t i = 0; i < valid_count; i++) {
-    float normalized = (temp_buffer[i] - min_val) / range;
+    float mA = adcSignedToMilliamps(temp_buffer[i]);
+    float normalized = (mA - min_mA) / range;
     uint8_t bin_index = (uint8_t)(normalized * num_bins);
     if (bin_index >= num_bins) bin_index = num_bins - 1;
     bins[bin_index]++;

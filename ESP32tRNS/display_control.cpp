@@ -189,20 +189,49 @@ void renderMenu(const char* title, const char* choices[], uint8_t num_choices, u
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x12_t_cyrillic);
   
-  // Заголовок
+  // Заголовок (без линии - экономим пиксели)
   u8g2.setCursor(0, 0);
   u8g2.print(title);
-  u8g2.drawLine(0, 11, 128, 11);
   
-  // Опции
-  for (uint8_t i = 0; i < num_choices; i++) {
-    uint8_t y = 15 + i * 10;
-    if (i == selected) {
+  // Прокрутка: экран 64px, заголовок 12px, остаётся 52px для пунктов (шаг 10px = 5 пунктов)
+  const uint8_t MENU_Y_START = 12;   // Начало списка опций
+  const uint8_t ITEM_HEIGHT = 10;    // Высота пункта
+  const uint8_t MAX_VISIBLE = 5;     // Макс. видимых пунктов
+  
+  // Вычисляем смещение прокрутки
+  uint8_t scroll_offset = 0;
+  if (num_choices > MAX_VISIBLE) {
+    if (selected >= MAX_VISIBLE) {
+      scroll_offset = selected - MAX_VISIBLE + 1;
+    }
+    // Не выходим за границы
+    if (scroll_offset > num_choices - MAX_VISIBLE) {
+      scroll_offset = num_choices - MAX_VISIBLE;
+    }
+  }
+  
+  // Рисуем видимые пункты
+  uint8_t visible_count = (num_choices < MAX_VISIBLE) ? num_choices : MAX_VISIBLE;
+  for (uint8_t i = 0; i < visible_count; i++) {
+    uint8_t item_idx = scroll_offset + i;
+    uint8_t y = MENU_Y_START + i * ITEM_HEIGHT;
+    
+    if (item_idx == selected) {
       u8g2.setCursor(0, y);
       u8g2.print(">");
     }
     u8g2.setCursor(10, y);
-    u8g2.print(choices[i]);
+    u8g2.print(choices[item_idx]);
+  }
+  
+  // Индикаторы прокрутки (справа)
+  if (num_choices > MAX_VISIBLE) {
+    if (scroll_offset > 0) {
+      u8g2.drawTriangle(124, 14, 120, 18, 128, 18);  // ▲ вверху
+    }
+    if (scroll_offset < num_choices - MAX_VISIBLE) {
+      u8g2.drawTriangle(124, 62, 120, 58, 128, 58);  // ▼ внизу
+    }
   }
   
   u8g2.sendBuffer();
@@ -212,10 +241,9 @@ void renderEditor() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x12_t_cyrillic);
   
-  // Название параметра
+  // Название параметра (без линии)
   u8g2.setCursor(0, 0);
   u8g2.print(editor_data.name);
-  u8g2.drawLine(0, 11, 128, 11);
   
   // Значение (крупным шрифтом) - показываем ВРЕМЕННОЕ значение!
   u8g2.setFont(u8g2_font_9x15_t_cyrillic);
@@ -236,7 +264,6 @@ void renderConfirm() {
   
   u8g2.setCursor(0, 0);
   u8g2.print("Остановить сеанс?");
-  u8g2.drawLine(0, 11, 128, 11);
   
   if (menu_selected == 0) {
     u8g2.setCursor(0, 25);
@@ -300,11 +327,13 @@ void renderCurrentScreen() {
       
     case SCR_SETTINGS_MENU:
       {
-        static char dac_str[48], fade_str[48];
+        static char dac_str[48], fade_str[48], pol_str[48], enc_str[48];
         snprintf(dac_str, sizeof(dac_str), "DAC коды/мА: %.0f", current_settings.dac_code_to_mA);
         snprintf(fade_str, sizeof(fade_str), "Плавный пуск: %.0fс", current_settings.fade_duration_sec);
-        const char* choices[] = { "<-Назад", dac_str, fade_str, "СБРОС на заводские" };
-        renderMenu("ОБЩИЕ НАСТРОЙКИ", choices, 4, menu_selected);
+        snprintf(pol_str, sizeof(pol_str), "Полярность: %s", current_settings.polarity_invert ? "Инв" : "Норм");
+        snprintf(enc_str, sizeof(enc_str), "Энкодер: %s", current_settings.enc_direction_invert ? "Инв" : "Норм");
+        const char* choices[] = { "<-Назад", dac_str, fade_str, pol_str, enc_str, "СБРОС на заводские" };
+        renderMenu("ОБЩИЕ НАСТРОЙКИ", choices, 6, menu_selected);
       }
       break;
       

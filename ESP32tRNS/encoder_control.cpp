@@ -1,5 +1,6 @@
 #include "encoder_control.h"
 #include "menu_control.h"
+#include "session_control.h"
 
 // Объект энкодера из библиотеки EncButton
 // Параметры: S1, S2, KEY
@@ -47,11 +48,12 @@ void updateEncoder() {
   enc.tick();
   
   // === Вращение ===
+  int8_t enc_dir = current_settings.enc_direction_invert ? -1 : 1;
   if (enc.left()) {
-    handleRotate(+1 * ENC_DIRECTION);
+    handleRotate(+1 * enc_dir);
   }
   if (enc.right()) {
-    handleRotate(-1 * ENC_DIRECTION);
+    handleRotate(-1 * enc_dir);
   }
   
   // === Клик кнопки — ЕДИНСТВЕННЫЙ debounce здесь ===

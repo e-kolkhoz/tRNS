@@ -1,6 +1,7 @@
 #include "dac_control.h"
 #include "display_control.h"
 #include "adc_control.h"
+#include "session_control.h"
 #include <math.h>
 
 // Глобальные переменные
@@ -27,21 +28,38 @@ static bool dac_active = false;
 // Левый канал = знак (32767=положительный, 0=отрицательный)
 // Правый канал = модуль * amplitude_scale (без dynamic_dac_gain)
 static void fillStereoBuffer() {
+  // Для tACS: вычисляем фазовый сдвиг для компенсации задержки VCCS
+  // phase_shift = 2π × freq × (delay_us / 1_000_000)
+  float phase_shift = 0.0f;
+  bool is_tacs = (current_settings.mode == MODE_TACS && tacs_active_frequency > 0.0f);
+  if (is_tacs) {
+    phase_shift = 2.0f * PI * tacs_active_frequency * (TACS_SIGN_SHIFT_US / 1000000.0f);
+  }
+  
   for (int i = 0; i < SIGNAL_SAMPLES; i++) {
     int16_t sample = signal_buffer[i];
+    bool is_positive;
     
-    // Определяем знак и модуль
-    bool is_positive = (sample >= 0);
+    if (is_tacs) {
+      // tACS: знак из сдвинутой по фазе синусоиды
+      // + порог TACS_SIGN_SHIFT_CODES для компенсации гистерезиса компаратора
+      float omega = 2.0f * PI * tacs_active_frequency / SAMPLE_RATE;
+      float sign_value = sinf(omega * i + phase_shift) * 32767.0f;  // В кодах
+      is_positive = (sign_value > (float)TACS_SIGN_SHIFT_CODES);
+    } else {
+      // tRNS/tDCS: знак напрямую из сэмпла
+      is_positive = (sample >= 0);
+    }
     
     // Применяем инверсию полярности (если электроды перепутаны)
-    #if POLARITY_INVERT
+    if (current_settings.polarity_invert) {
       is_positive = !is_positive;
-    #endif
+    }
     
     // Левый канал = знак
     stereo_buffer[i * 2] = is_positive ? DAC_SIGN_POSITIVE : DAC_SIGN_NEGATIVE;
     
-    // Правый канал = модуль * amplitude_scale (с насыщением)
+    // Правый канал = модуль * amplitude_scale
     int16_t mag = (sample >= 0) ? sample : -sample;
     float scaled = mag * amplitude_scale;
     if (scaled > 32767.0f) scaled = 32767.0f;

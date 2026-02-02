@@ -32,12 +32,16 @@
 #define ENC_S1      18
 #define ENC_S2      16
 #define ENC_KEY     39
-#define ENC_DIRECTION (-1)  // +1 или -1 для инверсии направления
+#define DEF_ENC_DIRECTION (-1)  // +1 или -1 для инверсии направления
 
 // --- I2S → PCM5102A (стерео DAC) ---
-#define I2S_BCLK    33  // BCK (Bit clock) PCM5102A
-#define I2S_WCLK    35  // LRCK (Word select / LRC) PCM5102A  
-#define I2S_DOUT    37  // DIN (Data in) PCM5102A
+// Компенсация задержки VCCS для tACS (фазовый сдвиг знака в микросекундах)
+// Отрицательный = знак отстаёт от модуля (типичный случай для VCCS)
+#define TACS_SIGN_SHIFT_US     (-1.5f)    // мкс, задержка VCCS?
+#define TACS_SIGN_SHIFT_CODES  50     // в кодах, компенсируем срабатывание компаратора
+#define I2S_BCLK               33          // BCK (Bit clock) PCM5102A
+#define I2S_WCLK               35          // LRCK (Word select / LRC) PCM5102A  
+#define I2S_DOUT               37          // DIN (Data in) PCM5102A
 
 // --- ADC показометр тока (sign-magnitude от H-моста) ---
 #define ADC_SIGN_PIN     3             // GPIO3 (ADC1_CH2) для знака (можно как цифровой)
@@ -96,7 +100,7 @@
 
 // === POLARITY INVERSION (для случая перепутанных электродов) ===
 // Если катод и анод перепутаны - меняй на true, перепрошей, готово!
-#define POLARITY_INVERT         false  // true = инвертировать знак на DAC и ADC
+#define DEF_POLARITY_INVERT     true  // true = инвертировать знак на DAC и ADC
 
 // Максимальная длина имени пресета
 #define PRESET_NAME_MAX_LEN     128

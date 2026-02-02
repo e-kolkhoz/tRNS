@@ -33,14 +33,13 @@ static constexpr CalibrationPoint CALIB_TABLE[] = {
 static constexpr size_t CALIB_TABLE_SIZE = sizeof(CALIB_TABLE) / sizeof(CALIB_TABLE[0]);
 
 // ============================================================================
-// === COMPILE-TIME ПРОВЕРКИ ===
+// === COMPILE-TIME ПРОВЕРКИ ТАБЛИЦЫ ===
 // ============================================================================
 
-// Проверка что таблица отсортирована и без дубликатов
 constexpr bool isTableValid() {
   for (size_t i = 1; i < CALIB_TABLE_SIZE; i++) {
     if (CALIB_TABLE[i].adc_raw <= CALIB_TABLE[i-1].adc_raw) {
-      return false;  // Не отсортирована или дубликат
+      return false;
     }
   }
   return true;
@@ -50,48 +49,56 @@ static_assert(CALIB_TABLE_SIZE >= 2, "Таблица должна содержа
 static_assert(isTableValid(), "Таблица должна быть отсортирована по возрастанию ADC без дубликатов");
 
 // ============================================================================
-// === ФУНКЦИЯ ПЕРЕСЧЁТА ===
+// === LOOKUP TABLE (LUT) ===
 // ============================================================================
 
-float adcRawToMilliamps(uint16_t adc_raw) {
-  // Ищем интервал для интерполяции
-  size_t i1 = 0;
-  size_t i2 = 1;
+static float code2mA[4096];  // Предрассчитанная таблица: индекс = ADC код, значение = mA
+
+// Интерполяция для заполнения LUT (вызывается один раз при старте)
+static float interpolateMilliamps(uint16_t adc_raw) {
+  size_t i1 = 0, i2 = 1;
   
   if (adc_raw <= CALIB_TABLE[0].adc_raw) {
-    // Экстраполяция влево
     i1 = 0; i2 = 1;
   } else if (adc_raw >= CALIB_TABLE[CALIB_TABLE_SIZE - 1].adc_raw) {
-    // Экстраполяция вправо
     i1 = CALIB_TABLE_SIZE - 2;
     i2 = CALIB_TABLE_SIZE - 1;
   } else {
-    // Бинарный поиск интервала
-    size_t lo = 0, hi = CALIB_TABLE_SIZE - 1;
-    while (hi - lo > 1) {
-      size_t mid = (lo + hi) / 2;
-      if (CALIB_TABLE[mid].adc_raw <= adc_raw) {
-        lo = mid;
-      } else {
-        hi = mid;
+    for (size_t i = 0; i < CALIB_TABLE_SIZE - 1; i++) {
+      if (adc_raw >= CALIB_TABLE[i].adc_raw && adc_raw < CALIB_TABLE[i + 1].adc_raw) {
+        i1 = i;
+        i2 = i + 1;
+        break;
       }
     }
-    i1 = lo;
-    i2 = hi;
   }
   
-  // Линейная интерполяция/экстраполяция
   float adc1 = (float)CALIB_TABLE[i1].adc_raw;
   float adc2 = (float)CALIB_TABLE[i2].adc_raw;
   float mA1 = CALIB_TABLE[i1].mA;
   float mA2 = CALIB_TABLE[i2].mA;
   
   float mA = mA1 + ((float)adc_raw - adc1) * (mA2 - mA1) / (adc2 - adc1);
-  
   return (mA < 0.0f) ? 0.0f : mA;
 }
 
-// Для знаковых данных — просто берём abs и восстанавливаем знак
+// Инициализация LUT — вызвать один раз при старте!
+void initADCCalibration() {
+  for (uint16_t i = 0; i < 4096; i++) {
+    code2mA[i] = interpolateMilliamps(i);
+  }
+}
+
+// ============================================================================
+// === БЫСТРЫЙ ДОСТУП (O(1) вместо O(log n)) ===
+// ============================================================================
+
+float adcRawToMilliamps(uint16_t adc_raw) {
+  if (adc_raw >= 4096) adc_raw = 4095;  // Защита от выхода за границы
+  return code2mA[adc_raw];
+}
+
+// Для знаковых данных — abs + восстановление знака
 float adcSignedToMilliamps(int16_t adc_signed) {
   float mag = adcRawToMilliamps((uint16_t)abs(adc_signed));
   return (adc_signed < 0) ? -mag : mag;

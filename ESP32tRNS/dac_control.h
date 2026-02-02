@@ -14,7 +14,7 @@
 extern int16_t* signal_buffer;  // МОНО: SIGNAL_SAMPLES
 extern bool dma_prefilled;
 
-// Имя текущего пресета (например, "tACS 640Hz 1mA demo")
+// Имя текущего пресета (например, "tACS 250Hz 1mA demo")
 extern char current_preset_name[PRESET_NAME_MAX_LEN];
 
 // Динамический коэффициент усиления (меняется на лету для fadein/fadeout)
@@ -32,11 +32,7 @@ void initDAC();
 // num_samples - количество МОНО-сэмплов (для стерео нужно умножить на 2)
 void setSignalBuffer(int16_t* new_buffer, int num_samples);
 
-// Генерация демо-сигнала (синус 640 Гц) - для отладки
-void generateDemoSignal();
-
 // === DMA УПРАВЛЕНИЕ ===
-
 // Предзаполнение DMA буферов
 void prefillDMABuffers();
 

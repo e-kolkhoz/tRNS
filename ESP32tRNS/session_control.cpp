@@ -9,13 +9,14 @@ SessionSettings current_settings;
 SessionState current_state = STATE_IDLE;
 uint32_t session_elapsed_sec = 0;  // Фактическое время последнего сеанса (секунды)
 uint32_t session_timer_start_ms = 0;  // Время старта сеанса для таймера на дисплее
+float tacs_active_frequency = 0.0f;  // Текущая частота tACS (для фазовой компенсации)
 
 // === ВНУТРЕННИЕ ПЕРЕМЕННЫЕ ===
 static uint32_t session_start_time = 0;     // Время старта текущего состояния сеанса
 
 // EEPROM адреса
 #define EEPROM_SIZE 512
-#define EEPROM_MAGIC 0xA5C4  // v2: ADC калибровка через таблицу
+#define EEPROM_MAGIC 0xA5C5  // v3: добавлены polarity_invert и enc_direction_invert
 #define EEPROM_ADDR_MAGIC 0
 #define EEPROM_ADDR_SETTINGS 2
 
@@ -33,7 +34,11 @@ static const SessionSettings default_settings = {
   
   // Общие настройки (заводские из config.h)
   .dac_code_to_mA = DEF_DAC_CODE_TO_MA,
-  .fade_duration_sec = DEF_FADE_DURATION_SEC
+  .fade_duration_sec = DEF_FADE_DURATION_SEC,
+  
+  // Бинарные настройки (дефолты из config.h)
+  .polarity_invert = DEF_POLARITY_INVERT,
+  .enc_direction_invert = (DEF_ENC_DIRECTION == -1)  // -1 = инвертирован
 };
 
 // === ИНИЦИАЛИЗАЦИЯ ===
@@ -101,6 +106,7 @@ static void generateTDCS() {
 // Генератор tACS - синусоида
 static void generateTACS() {
   float freq = getValidTACSFrequency(current_settings.frequency_tACS_Hz);
+  tacs_active_frequency = freq;  // Сохраняем для фазовой компенсации в DAC
   float omega = 2.0f * PI * freq / SAMPLE_RATE;
   
   for (uint32_t i = 0; i < SIGNAL_SAMPLES; i++) {
@@ -301,7 +307,7 @@ float getValidTACSFrequency(float target_Hz) {
   // Для tACS разумный минимум ~0.5 Гц
   
   float min_freq = 0.5f;  // Минимум 0.5 Гц
-  float max_freq = 640.0f;  // Максимум 640 Гц (как у tRNS)
+  float max_freq = 250.0f;  // Максимум 250 Гц
   
   // Ограничиваем диапазон
   if (target_Hz < min_freq) target_Hz = min_freq;

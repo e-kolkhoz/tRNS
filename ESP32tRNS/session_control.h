@@ -40,6 +40,10 @@ struct SessionSettings {
   // ADC калибровка теперь через таблицу в adc_calibration.cpp
   float dac_code_to_mA;            // DAC: код → мА (по умолчанию 0.375)
   float fade_duration_sec;         // Длительность fadein/fadeout (секунды)
+  
+  // Бинарные настройки
+  bool polarity_invert;            // Инверсия полярности (перепутаны электроды)
+  bool enc_direction_invert;       // Инверсия направления энкодера
 };
 
 // === ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ===
@@ -47,6 +51,7 @@ extern SessionSettings current_settings;  // Текущие настройки
 extern SessionState current_state;        // Текущее состояние сеанса
 extern uint32_t session_elapsed_sec;      // Фактическое время сеанса (секунды)
 extern uint32_t session_timer_start_ms;   // Время старта сеанса для отображения таймера
+extern float tacs_active_frequency;       // Текущая частота tACS (для фазовой компенсации)
 
 // === ФУНКЦИИ ===
 

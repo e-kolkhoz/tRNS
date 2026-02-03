@@ -77,108 +77,258 @@ void updateDisplay() {
   renderCurrentScreen();  // Рендерим текущий экран
 }
 
-// Принудительное обновление дисплея
+// ============================================================================
+// === ОСЦИЛЛОГРАММЫ ДЛЯ ДАШБОРДОВ ===
+// ============================================================================
+
+// Константы осциллограммы
+#define SCOPE_X       16    // Начало по X (после тиков Y)
+#define SCOPE_W       112   // Ширина осциллограммы
+#define SCOPE_Y       12    // Начало по Y
+#define SCOPE_H       38    // Высота осциллограммы
+
+// Рисует точечную горизонтальную линию
+static void drawDottedHLine(uint8_t x, uint8_t y, uint8_t w) {
+  for (uint8_t i = 0; i < w; i += 3) {
+    u8g2.drawPixel(x + i, y);
+  }
+}
+
+// Рисует осциллограмму из кольцевого буфера
+// y_min, y_max — лимиты в мА
+// tick_positions[] — Y позиции для тиков (в мА), tick_labels[] — подписи
+// num_ticks — количество тиков
+// samples — сколько сэмплов показать (0 = весь буфер), start_offset — смещение от конца
+static void drawOscilloscope(float y_min, float y_max, 
+                             const float* tick_positions, const char* const* tick_labels, uint8_t num_ticks,
+                             uint32_t samples, uint32_t start_offset) {
+  float y_range = y_max - y_min;
+  if (y_range < 0.01f) y_range = 0.01f;
+  
+  u8g2.setFont(u8g2_font_4x6_tr);
+  
+  // Рисуем тики и точечные линии
+  for (uint8_t t = 0; t < num_ticks; t++) {
+    float normalized = (tick_positions[t] - y_min) / y_range;
+    int16_t py = SCOPE_Y + SCOPE_H - 1 - (int16_t)(normalized * (SCOPE_H - 1));
+    if (py >= SCOPE_Y && py <= SCOPE_Y + SCOPE_H - 1) {
+      // Подпись слева
+      u8g2.drawStr(0, py - 2, tick_labels[t]);
+      // Точечная линия
+      drawDottedHLine(SCOPE_X, py, SCOPE_W);
+    }
+  }
+  
+  // Децимация: буфер → экран
+  if (samples == 0) samples = ADC_RING_SIZE;
+  uint32_t decimation = samples / SCOPE_W;
+  if (decimation < 1) decimation = 1;
+  
+  uint32_t buf_end = adc_write_index;
+  uint32_t buf_start = (buf_end + ADC_RING_SIZE - samples - start_offset) % ADC_RING_SIZE;
+  
+  int16_t prev_py = -1;
+  for (uint8_t x = 0; x < SCOPE_W; x++) {
+    uint32_t idx = (buf_start + x * decimation) % ADC_RING_SIZE;
+    int16_t raw = adc_ring_buffer[idx];
+    if (raw == ADC_INVALID_VALUE) continue;
+    
+    float mA = adcSignedToMilliamps(raw);
+    
+    // Нормализация в пиксели
+    float normalized = (mA - y_min) / y_range;
+    int16_t py = SCOPE_Y + SCOPE_H - 1 - (int16_t)(normalized * (SCOPE_H - 1));
+    if (py < SCOPE_Y) py = SCOPE_Y;
+    if (py > SCOPE_Y + SCOPE_H - 1) py = SCOPE_Y + SCOPE_H - 1;
+    
+    // Рисуем линию от предыдущей точки
+    if (prev_py >= 0) {
+      u8g2.drawLine(SCOPE_X + x - 1, prev_py, SCOPE_X + x, py);
+    }
+    prev_py = py;
+  }
+}
+
+// Вычисление RMS и среднего из буфера
+static void calcBufferStats(float* mean_mA, float* rms_mA) {
+  double sum = 0, sum_sq = 0;
+  uint32_t count = 0;
+  
+  for (uint32_t i = 0; i < ADC_RING_SIZE; i++) {
+    int16_t raw = adc_ring_buffer[i];
+    if (raw == ADC_INVALID_VALUE) continue;
+    float mA = adcSignedToMilliamps(raw);
+    sum += mA;
+    sum_sq += mA * mA;
+    count++;
+  }
+  
+  if (count > 0) {
+    *mean_mA = sum / count;
+    *rms_mA = sqrtf(sum_sq / count);
+  } else {
+    *mean_mA = 0;
+    *rms_mA = 0;
+  }
+}
+
+// Строка метрик + тонкий прогресс-бар внизу
+static void drawMetricsAndProgress(const char* metric_str) {
+  extern float dynamic_dac_gain;
+  
+  // Метрики: x1.0:0.9mA 12:24
+  u8g2.setFont(u8g2_font_6x12_t_cyrillic);
+  char line[32];
+  
+  uint32_t elapsed_sec = (millis() - session_timer_start_ms) / 1000;
+  uint16_t minutes = elapsed_sec / 60;
+  uint8_t seconds = elapsed_sec % 60;
+  if (minutes > 99) { minutes = 99; seconds = 59; }
+  
+  snprintf(line, sizeof(line), "x%.1f:%s %02u:%02u", dynamic_dac_gain, metric_str, minutes, seconds);
+  u8g2.drawStr(0, 52, line);
+  
+  // Тонкий прогресс-бар (1 пиксель) внизу экрана
+  uint16_t duration_min = current_settings.duration_tRNS_min;
+  switch (current_settings.mode) {
+    case MODE_TDCS: duration_min = current_settings.duration_tDCS_min; break;
+    case MODE_TACS: duration_min = current_settings.duration_tACS_min; break;
+    default: break;
+  }
+  uint32_t total_sec = duration_min * 60;
+  float progress = (total_sec > 0) ? ((float)elapsed_sec / total_sec) : 0;
+  if (progress > 1.0f) progress = 1.0f;
+  
+  uint8_t fill_w = (uint8_t)(progress * 128);
+  u8g2.drawHLine(0, 63, fill_w);
+}
+
+// === ДАШБОРД tRNS ===
+static void renderDashboardTRNS() {
+  float amp = current_settings.amplitude_tRNS_mA;
+  
+  // Строка 1: Конфиг
+  u8g2.setFont(u8g2_font_6x12_t_cyrillic);
+  char title[28];
+  snprintf(title, sizeof(title), "hf-tRNS %.1fmA %um", amp, current_settings.duration_tRNS_min);
+  u8g2.drawStr(0, 0, title);
+  
+  // Осциллограмма: ylim = ±amp*1.2, тики на ±amp и 0
+  float ticks[] = { amp, 0, -amp };
+  char tick_plus[8], tick_zero[] = "0", tick_minus[8];
+  snprintf(tick_plus, sizeof(tick_plus), "%.1f", amp);
+  snprintf(tick_minus, sizeof(tick_minus), "%.1f", -amp);
+  const char* labels[] = { tick_plus, tick_zero, tick_minus };
+  
+  drawOscilloscope(-amp * 1.2f, amp * 1.2f, ticks, labels, 3, 0, 0);
+  
+  // Метрики: 3σ
+  float mean_mA, rms_mA;
+  calcBufferStats(&mean_mA, &rms_mA);
+  float sigma = sqrtf(rms_mA * rms_mA - mean_mA * mean_mA);
+  
+  char metric[16];
+  snprintf(metric, sizeof(metric), "%.1fmA", sigma * 3.5);
+  drawMetricsAndProgress(metric);
+}
+
+// === ДАШБОРД tDCS ===
+static void renderDashboardTDCS() {
+  float amp = current_settings.amplitude_tDCS_mA;
+  
+  // Строка 1: Конфиг
+  u8g2.setFont(u8g2_font_6x12_t_cyrillic);
+  char title[24];
+  snprintf(title, sizeof(title), "tDCS %.1fmA %um", amp, current_settings.duration_tDCS_min);
+  u8g2.drawStr(0, 0, title);
+  
+  // Осциллограмма УНИПОЛЯРНАЯ: ylim = [0, amp*1.2], тики на amp и 0
+  float ticks[] = { amp, 0 };
+  char tick_amp[8], tick_zero[] = "0";
+  snprintf(tick_amp, sizeof(tick_amp), "%.1f", amp);
+  const char* labels[] = { tick_amp, tick_zero };
+  
+  drawOscilloscope(-amp * 0.1f, amp * 1.2f, ticks, labels, 2, 0, 0);
+  
+  // Метрики: средний ток
+  float mean_mA, rms_mA;
+  calcBufferStats(&mean_mA, &rms_mA);
+  
+  char metric[16];
+  snprintf(metric, sizeof(metric), "%.1fmA", mean_mA);
+  drawMetricsAndProgress(metric);
+}
+
+// === ДАШБОРД tACS ===
+static void renderDashboardTACS() {
+  float amp = current_settings.amplitude_tACS_mA;
+  float freq = current_settings.frequency_tACS_Hz;
+  
+  // Строка 1: Конфиг
+  u8g2.setFont(u8g2_font_6x12_t_cyrillic);
+  char title[28];
+  snprintf(title, sizeof(title), "tACS %.0fHz %.1fmA %um", freq, amp, current_settings.duration_tACS_min);
+  u8g2.drawStr(0, 0, title);
+  
+  // Синхронизация по фронту: ищем 2 периода от конца буфера
+  uint32_t period_samples = (uint32_t)(ADC_SAMPLE_RATE / freq);
+  uint32_t two_periods = period_samples * 2;
+  
+  // Поиск фронта от конца буфера
+  uint32_t start_offset = 0;
+  uint32_t search_start = (adc_write_index + ADC_RING_SIZE - two_periods - 100) % ADC_RING_SIZE;
+  int16_t prev_raw = adc_ring_buffer[search_start];
+  uint8_t crossings_found = 0;
+  
+  for (uint32_t i = 1; i < two_periods + 100 && crossings_found < 3; i++) {
+    uint32_t idx = (search_start + i) % ADC_RING_SIZE;
+    int16_t raw = adc_ring_buffer[idx];
+    if (raw == ADC_INVALID_VALUE || prev_raw == ADC_INVALID_VALUE) {
+      prev_raw = raw;
+      continue;
+    }
+    if (prev_raw < 0 && raw >= 0) {
+      crossings_found++;
+      if (crossings_found == 1) {
+        start_offset = ADC_RING_SIZE - (search_start + i - adc_write_index + ADC_RING_SIZE) % ADC_RING_SIZE;
+      }
+    }
+    prev_raw = raw;
+  }
+  
+  // Осциллограмма: 2 периода, ylim = ±amp*1.2, тики на ±amp и 0
+  float ticks[] = { amp, 0, -amp };
+  char tick_plus[8], tick_zero[] = "0", tick_minus[8];
+  snprintf(tick_plus, sizeof(tick_plus), "%.1f", amp);
+  snprintf(tick_minus, sizeof(tick_minus), "%.1f", -amp);
+  const char* labels[] = { tick_plus, tick_zero, tick_minus };
+  
+  drawOscilloscope(-amp * 1.2f, amp * 1.2f, ticks, labels, 3, two_periods, start_offset);
+  
+  // Метрики: амплитуда
+  float mean_mA, rms_mA;
+  calcBufferStats(&mean_mA, &rms_mA);
+  float amplitude_mA = sqrtf(rms_mA * rms_mA - mean_mA * mean_mA) * 1.414f;
+  
+  char metric[16];
+  snprintf(metric, sizeof(metric), "%.1fmA", amplitude_mA);
+  drawMetricsAndProgress(metric);
+}
+
+// Принудительное обновление дисплея — ветвление по режиму
 void refreshDisplay() {
   u8g2.clearBuffer();
   
-  // === СТРОКА 1: Название пресета ===
-  u8g2.setFont(u8g2_font_6x12_t_cyrillic);
-  
-  // Название пресета (обрезаем если длинное)
-  char preset_display[24];
-  const char* preset_name = current_preset_name;
-  int len = strlen(preset_name);
-  if (len > 23) {
-    strncpy(preset_display, preset_name, 21);
-    preset_display[20] = '.';
-    preset_display[21] = '.';
-    preset_display[22] = '.';
-    preset_display[23] = '\0';
-  } else {
-    strncpy(preset_display, preset_name, 24);
-    preset_display[23] = '\0';
-  }
-  u8g2.drawStr(0, 0, preset_display);
-  
-  // ПРАВЫЙ ВЕРХНИЙ УГОЛ: dynamic_dac_gain в формате X.X
-  extern float dynamic_dac_gain;
-  char gain_str[6];
-  snprintf(gain_str, sizeof(gain_str), "%.1f", dynamic_dac_gain);
-  u8g2.drawStr(110, 0, gain_str);  // Правый край
-
-  // === СТРОКА 2: Таймер MM:SS (крупный шрифт) ===
-  u8g2.setFont(u8g2_font_7x13_t_cyrillic);
-  uint32_t elapsed_sec = (millis() - session_timer_start_ms) / 1000;
-  uint16_t minutes_total = elapsed_sec / 60;
-  uint8_t seconds = elapsed_sec % 60;
-  if (minutes_total > 99) {
-    minutes_total = 99;
-    seconds = 59;
-  }
-  char timer_str[6];
-  snprintf(timer_str, sizeof(timer_str), "%02u:%02u", (uint8_t)minutes_total, seconds);
-  u8g2.drawStr(0, 14, timer_str);
-  
-  // Возвращаем основной шрифт для остального текста
-  u8g2.setFont(u8g2_font_6x12_t_cyrillic);
-  
-  // === СТРОКА 2: Перцентили и среднее ADC ===
-  int16_t p1_raw = 0, p99_raw = 0, mean_raw = 0;
-  bool adc_valid = getADCPercentilesRaw(&p1_raw, &p99_raw, &mean_raw);
-  
-  if (adc_valid) {
-    char stats_str[32];
-    
-    // Пересчёт через калибровочную таблицу
-    float p1_mA = adcSignedToMilliamps(p1_raw);
-    float mean_mA = adcSignedToMilliamps(mean_raw);
-    float p99_mA = adcSignedToMilliamps(p99_raw);
-
-    snprintf(stats_str, sizeof(stats_str), "%.1f > %.1f < %.1f", p1_mA, mean_mA, p99_mA);
-    u8g2.setFont(u8g2_font_7x13_t_cyrillic);
-    u8g2.drawStr(0, 50, stats_str);
-  } else {
-    u8g2.drawStr(0, 28, "ADC: waiting...");
-  }
-  
-  // === СТРОКИ 3-6: Гистограмму ADC ===
-  const uint8_t NUM_BINS = 11;  // Меньше бинов = шире каждый = меньше шума ADC
-  uint16_t adc_bins[NUM_BINS];
-  bool adc_hist_ok = buildADCHistogram(adc_bins, NUM_BINS);
-  
-  if (adc_hist_ok) {
-    // Находим максимальное значение для нормализации высоты столбцов
-    uint16_t max_adc = 0;
-    for (uint8_t i = 0; i < NUM_BINS; i++) {
-
-      if (adc_bins[i] > max_adc) max_adc = adc_bins[i];
-    }
-    
-    if (max_adc == 0) max_adc = 1;  // Защита от деления на ноль
-    
-    // Высота области для гистограмм: 64 - 24 = 40 пикселей
-    // Делим пополам: по 20 пикселей на каждую гистограмму
-    const uint8_t HIST_HEIGHT = 18;  // Высота столбцов гистограммы
-    //const uint8_t HIST_Y_PRESET = 26;  // Y координата для пресета
-    const uint8_t HIST_Y_ADC = 26;     // Y координата для ADC
-    const uint8_t BIN_WIDTH = 10;       // Ширина столбца (128 / 11 ≈ 11)
-    const uint8_t BIN_SPACING = 1;      // Отступ между столбцами
-    
-    
-    // Рисуем гистограмму ADC
-    for (uint8_t i = 0; i < NUM_BINS; i++) {
-      uint8_t x = i * (BIN_WIDTH + BIN_SPACING) + 4;
-      uint8_t height = (adc_bins[i] * HIST_HEIGHT) / max_adc;
-      if (height > 0) {
-        u8g2.drawBox(x, HIST_Y_ADC + HIST_HEIGHT - height, BIN_WIDTH, height);
-      }
-    }
-  } else {
-    // Чтобы не накладывать текст "ADC: waiting..." и "Histograms: waiting..."
-    if (adc_valid) {
-      u8g2.setFont(u8g2_font_6x12_t_cyrillic);
-      u8g2.drawStr(0, 40, "Histograms: waiting...");
-    }
+  switch (current_settings.mode) {
+    case MODE_TRNS:
+      renderDashboardTRNS();
+      break;
+    case MODE_TDCS:
+      renderDashboardTDCS();
+      break;
+    case MODE_TACS:
+      renderDashboardTACS();
+      break;
   }
   
   u8g2.sendBuffer();

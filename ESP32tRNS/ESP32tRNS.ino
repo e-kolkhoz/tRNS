@@ -170,6 +170,7 @@ void loop() {
   // 5. Обновляем OLED дисплей (неблокирующе, с ограничением частоты)
   updateDisplay();
   
+  /*
   //DEBUG: 50 отсчётов ADC в mA (раз в 2 сек во время сеанса)
   static uint32_t last_dump = 0;
   if (current_state != STATE_IDLE && millis() - last_dump > 2000) {
@@ -185,6 +186,7 @@ void loop() {
    }
    last_dump = millis();
   }
+  */
   
   // БЕЗ DELAY - loop должен крутиться максимально быстро для отзывчивости!
 }

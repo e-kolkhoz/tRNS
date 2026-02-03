@@ -102,6 +102,11 @@ static bool IRAM_ATTR adc_dma_conv_done_callback(
 void initADC() {
   resetADCRingBufferInternal();
   
+  // Включаем внутренний pull-down на входе magnitude
+  // Это притягивает вход к GND при разрыве цепи (вместо болтанки)
+  // ~45кОм внутренний резистор — должен помочь от наводок
+  // gpio_set_pull_mode((gpio_num_t)ADC_MOD_PIN, GPIO_PULLDOWN_ONLY);
+  
   // Конфигурация continuous mode
   adc_continuous_handle_cfg_t adc_config = {
     .max_store_buf_size = ADC_FRAME_SIZE * ADC_DMA_BUF_COUNT * SOC_ADC_DIGI_DATA_BYTES_PER_CONV,
@@ -190,6 +195,10 @@ void readADCFromDMA() {
       if (has_sign && has_mag) {
         // Определяем знак: если sign > порога, то положительный
         bool is_positive = (sign_value > ADC_SIGN_THRESHOLD);
+        // Отсекаем аномалии: > 2700 кодов = шум/разрыв цепи (вне калибровки)
+        if (mag_value > 2700) {
+          mag_value = 0;  // Пропускаем мусор, тока нет
+        }
 
         // Применяем инверсию полярности (если электроды перепутаны)
         if (current_settings.polarity_invert) {

@@ -16,7 +16,7 @@ static uint32_t session_start_time = 0;     // Время старта теку�
 
 // EEPROM адреса
 #define EEPROM_SIZE 512
-#define EEPROM_MAGIC 0xA5C5  // v3: добавлены polarity_invert и enc_direction_invert
+#define EEPROM_MAGIC 0xA5C6  // v4: добавлены adc_multiplier и trns_multiplier
 #define EEPROM_ADDR_MAGIC 0
 #define EEPROM_ADDR_SETTINGS 2
 
@@ -35,6 +35,8 @@ static const SessionSettings default_settings = {
   // Общие настройки (заводские из config.h)
   .dac_code_to_mA = DEF_DAC_CODE_TO_MA,
   .fade_duration_sec = DEF_FADE_DURATION_SEC,
+  .adc_multiplier = DEF_ADC_MULTIPLIER,
+  .trns_multiplier = DEF_TRNS_MULTIPLIER,
   
   // Бинарные настройки (дефолты из config.h)
   .polarity_invert = DEF_POLARITY_INVERT,
@@ -158,10 +160,18 @@ void startSession() {
       case MODE_TACS: amplitude_mA = current_settings.amplitude_tACS_mA; break;
       case MODE_TRNS: default: break;
     }
+    
     // dac_code_to_mA = сколько КОДОВ на 1 мА
-    float target_code = (current_settings.dac_code_to_mA > 0.0f)
-                          ? (amplitude_mA * current_settings.dac_code_to_mA)
-                          : 0.0f;
+    float target_code;
+    if (current_settings.mode == MODE_TRNS) {
+      // tRNS: применяем trns_multiplier для компенсации того, что 3σ шума < amplitude
+      // При Гауссовом шуме ~99.7% значений в пределах ±3σ, но пресет обрезан по ±32767
+      // trns_multiplier ~1.2 подтягивает 3σ ближе к заданной amplitude
+      target_code = amplitude_mA * current_settings.dac_code_to_mA * current_settings.trns_multiplier;
+    } else {
+      target_code = amplitude_mA * current_settings.dac_code_to_mA;
+    }
+    if (current_settings.dac_code_to_mA <= 0.0f) target_code = 0.0f;
     if (target_code < 0.0f) target_code = 0.0f;
     if (target_code > 32767.0f) target_code = 32767.0f;
     setAmplitudeScale(target_code / 32767.0f);

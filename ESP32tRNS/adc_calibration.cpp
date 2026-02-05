@@ -1,4 +1,5 @@
 #include "adc_calibration.h"
+#include "session_control.h"
 
 // ============================================================================
 // === КАЛИБРОВОЧНАЯ ТАБЛИЦА ===
@@ -95,7 +96,8 @@ void initADCCalibration() {
 
 float adcRawToMilliamps(uint16_t adc_raw) {
   if (adc_raw >= 4096) adc_raw = 4095;  // Защита от выхода за границы
-  return code2mA[adc_raw];
+  // Применяем adc_multiplier для подстройки калибровки
+  return code2mA[adc_raw] * current_settings.adc_multiplier;
 }
 
 // Для знаковых данных — abs + восстановление знака

@@ -124,8 +124,8 @@
 #define AMPLITUDE_INCREMENT_MA  0.1f
 
 // Частота tACS (Гц)
-#define MIN_TACS_FREQ_HZ        0.5f
-#define MAX_TACS_FREQ_HZ        640.0f
+#define MIN_TACS_FREQ_HZ        1.0f
+#define MAX_TACS_FREQ_HZ        250.0f
 #define TACS_FREQ_INCREMENT_HZ  1.0f
 
 // Длительность сеанса (минуты)
@@ -142,6 +142,18 @@
 #define MIN_FADE_DURATION_SEC   1.0f
 #define MAX_FADE_DURATION_SEC   60.0f
 #define FADE_DURATION_INCREMENT 1.0f
+
+// Доп множитель для ADC калибровки (подстройка таблицы)
+#define DEF_ADC_MULTIPLIER        1.00f
+#define MIN_ADC_MULTIPLIER        0.50f
+#define MAX_ADC_MULTIPLIER        2.00f
+#define ADC_MULTIPLIER_INCREMENT  0.01f
+
+// Доп множитель для tRNS, подтягиваем амплитуду к 3sigma
+#define DEF_TRNS_MULTIPLIER       1.35f
+#define MIN_TRNS_MULTIPLIER       1.00f
+#define MAX_TRNS_MULTIPLIER       1.80f
+#define TRNS_MULTIPLIER_INCREMENT 0.01f
 
 #endif // CONFIG_H
 

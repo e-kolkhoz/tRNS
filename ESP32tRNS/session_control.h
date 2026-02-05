@@ -38,8 +38,10 @@ struct SessionSettings {
   
   // Общие настройки (калибровка)
   // ADC калибровка теперь через таблицу в adc_calibration.cpp
-  float dac_code_to_mA;            // DAC: код → мА (по умолчанию 0.375)
+  float dac_code_to_mA;            // DAC: код → мА
   float fade_duration_sec;         // Длительность fadein/fadeout (секунды)
+  float adc_multiplier;            // Множитель ADC калибровки (подстройка таблицы)
+  float trns_multiplier;           // Множитель для tRNS (компенсация 3σ < amplitude)
   
   // Бинарные настройки
   bool polarity_invert;            // Инверсия полярности (перепутаны электроды)

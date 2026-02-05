@@ -63,8 +63,8 @@ void handleRotate(int8_t delta) {
       break;
       
     case SCR_SETTINGS_MENU:
-      // Общие настройки: 6 опций (0-5)
-      menu_selected = constrain(menu_selected - delta, 0, 5);
+      // Общие настройки: 8 опций (0-7)
+      menu_selected = constrain(menu_selected - delta, 0, 7);
       break;
       
     case SCR_EDITOR:
@@ -205,9 +205,9 @@ void executeSessionMenuChoice(StimMode mode) {
         openEditor("Амплитуда мА", &current_settings.amplitude_tACS_mA, 
                    AMPLITUDE_INCREMENT_MA, MIN_AMPLITUDE_MA, MAX_AMPLITUDE_MA, false);
         break;
-      case 2:  // Частота
+      case 2:  // Частота (целое число, округление к сетке при генерации)
         openEditor("Частота Гц", &current_settings.frequency_tACS_Hz, 
-                   TACS_FREQ_INCREMENT_HZ, MIN_TACS_FREQ_HZ, MAX_TACS_FREQ_HZ, false);
+                   TACS_FREQ_INCREMENT_HZ, MIN_TACS_FREQ_HZ, MAX_TACS_FREQ_HZ, true);
         break;
       case 3:  // Продолжительность
         {
@@ -265,34 +265,45 @@ void executeSessionMenuChoice(StimMode mode) {
 // === ВЫПОЛНЕНИЕ ВЫБОРА В МЕНЮ ОБЩИХ НАСТРОЕК ===
 void executeSettingsMenuChoice() {
   // Структура меню:
+  // const char* choices[] = { "<-Назад", enc_str, pol_str, dac_str, fade_str, adc_str, trns_str, "СБРОС на заводские" };
   // 0: Назад
-  // 1: DAC_Code2mA
-  // 2: Плавный пуск, с
-  // 3: Полярность: toggle
-  // 4: Энкодер: toggle
-  // 5: Сбросить на заводские
+  // 1: Энкодер: toggle
+  // 2: Полярность: toggle
+  // 3: DAC коды/мА
+  // 4: Плавный пуск, с
+  // 5: ADC множитель (калибровка показометра)
+  // 6: tRNS множитель (компенсация 3σ)
+  // 7: Сбросить на заводские
   
   switch (menu_selected) {
     case 0:  // Назад
       popScreen();
       break;
-    case 1:  // DAC_Code2mA
-      openEditor("DAC_Code2mA", &current_settings.dac_code_to_mA, 
-                 DAC_CODE_TO_MA_INCREMENT, MIN_DAC_CODE_TO_MA, MAX_DAC_CODE_TO_MA, false);
-      break;
-    case 2:  // Плавный пуск, с
-      openEditor("Плавн.пуск,с", &current_settings.fade_duration_sec, 
-                 FADE_DURATION_INCREMENT, MIN_FADE_DURATION_SEC, MAX_FADE_DURATION_SEC, false);
-      break;
-    case 3:  // Полярность: toggle
-      current_settings.polarity_invert = !current_settings.polarity_invert;
-      saveSettings();
-      break;
-    case 4:  // Энкодер: toggle
+    case 1:  // Энкодер: toggle
       current_settings.enc_direction_invert = !current_settings.enc_direction_invert;
       saveSettings();
       break;
-    case 5:  // Сбросить на заводские
+    case 2:  // Полярность: toggle
+      current_settings.polarity_invert = !current_settings.polarity_invert;
+      saveSettings();
+      break;
+    case 3:  // DAC коды/мА
+      openEditor("DAC_Code2mA", &current_settings.dac_code_to_mA, 
+                 DAC_CODE_TO_MA_INCREMENT, MIN_DAC_CODE_TO_MA, MAX_DAC_CODE_TO_MA, false);
+      break;
+    case 4:  // Плавный пуск, с
+      openEditor("Плавн.пуск,с", &current_settings.fade_duration_sec, 
+                 FADE_DURATION_INCREMENT, MIN_FADE_DURATION_SEC, MAX_FADE_DURATION_SEC, false);
+      break;
+    case 5:  // ADC множитель
+      openEditor("ADC mult", &current_settings.adc_multiplier, 
+                 ADC_MULTIPLIER_INCREMENT, MIN_ADC_MULTIPLIER, MAX_ADC_MULTIPLIER, false);
+      break;
+    case 6:  // tRNS множитель
+      openEditor("tRNS mult", &current_settings.trns_multiplier, 
+                 TRNS_MULTIPLIER_INCREMENT, MIN_TRNS_MULTIPLIER, MAX_TRNS_MULTIPLIER, false);
+      break;
+    case 7:  // Сбросить на заводские
       resetToDefaults();
       popScreen();  // Вернуться в главное меню
       break;

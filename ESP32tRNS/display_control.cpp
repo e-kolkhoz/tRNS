@@ -82,14 +82,14 @@ void updateDisplay() {
 // ============================================================================
 
 // Константы осциллограммы
-#define SCOPE_X       16    // Начало по X (после тиков Y)
+#define SCOPE_X       17    // Начало по X (после тиков Y)
 #define SCOPE_W       112   // Ширина осциллограммы
 #define SCOPE_Y       12    // Начало по Y
 #define SCOPE_H       38    // Высота осциллограммы
 
 // Рисует точечную горизонтальную линию
 static void drawDottedHLine(uint8_t x, uint8_t y, uint8_t w) {
-  for (uint8_t i = 0; i < w; i += 3) {
+  for (uint8_t i = 0; i < w; i += 4) {
     u8g2.drawPixel(x + i, y);
   }
 }
@@ -176,7 +176,7 @@ static void calcBufferStats(float* mean_mA, float* rms_mA) {
 static void drawMetricsAndProgress(const char* metric_str) {
   extern float dynamic_dac_gain;
   
-  // Метрики: x1.0:0.9mA 12:24
+  // Метрики: x1.0  0.9mA  12:24
   u8g2.setFont(u8g2_font_6x12_t_cyrillic);
   char line[32];
   
@@ -185,7 +185,7 @@ static void drawMetricsAndProgress(const char* metric_str) {
   uint8_t seconds = elapsed_sec % 60;
   if (minutes > 99) { minutes = 99; seconds = 59; }
   
-  snprintf(line, sizeof(line), "x%.1f:%s %02u:%02u", dynamic_dac_gain, metric_str, minutes, seconds);
+  snprintf(line, sizeof(line), "x%.1f   %s    %02u:%02u", dynamic_dac_gain, metric_str, minutes, seconds);
   u8g2.drawStr(0, 52, line);
   
   // Тонкий прогресс-бар (1 пиксель) внизу экрана
@@ -228,7 +228,7 @@ static void renderDashboardTRNS() {
   float sigma = sqrtf(rms_mA * rms_mA - mean_mA * mean_mA);
   
   char metric[16];
-  snprintf(metric, sizeof(metric), "%.1fmA", sigma * 3.5);
+  snprintf(metric, sizeof(metric), "%.1fmA", sigma * 3);
   drawMetricsAndProgress(metric);
 }
 
@@ -400,6 +400,9 @@ void renderEditor() {
   char value_str[16];
   if (editor_data.is_int) {
     snprintf(value_str, sizeof(value_str), "%d", (int)editor_temp_value);
+  } else if (editor_data.increment < 0.1f) {
+    // Мелкий шаг (0.01) — показываем 2 знака после запятой
+    snprintf(value_str, sizeof(value_str), "%.2f", editor_temp_value);
   } else {
     snprintf(value_str, sizeof(value_str), "%.1f", editor_temp_value);
   }
@@ -457,7 +460,7 @@ void renderCurrentScreen() {
     case SCR_TDCS_MENU:
       {
         static char amp_str[48], dur_str[48];
-        snprintf(amp_str, sizeof(amp_str), "Макс.ток: %.1fмА", current_settings.amplitude_tDCS_mA);
+        snprintf(amp_str, sizeof(amp_str), "Ток: %.1fмА", current_settings.amplitude_tDCS_mA);
         snprintf(dur_str, sizeof(dur_str), "Длительность: %uм", current_settings.duration_tDCS_min);
         const char* choices[] = { "СТАРТ", amp_str, dur_str, "<-Назад" };
         renderMenu("tDCS", choices, 4, menu_selected);
@@ -477,13 +480,15 @@ void renderCurrentScreen() {
       
     case SCR_SETTINGS_MENU:
       {
-        static char dac_str[48], fade_str[48], pol_str[48], enc_str[48];
+        static char dac_str[32], fade_str[32], adc_str[32], trns_str[32], pol_str[32], enc_str[32];
+        snprintf(enc_str, sizeof(enc_str), "Энкодер: %s", current_settings.enc_direction_invert ? "Инв." : "Норм.");
+        snprintf(pol_str, sizeof(pol_str), "Полярность: %s", current_settings.polarity_invert ? "Инв." : "Норм.");
         snprintf(dac_str, sizeof(dac_str), "DAC коды/мА: %.0f", current_settings.dac_code_to_mA);
-        snprintf(fade_str, sizeof(fade_str), "Плавный пуск: %.0fс", current_settings.fade_duration_sec);
-        snprintf(pol_str, sizeof(pol_str), "Полярность: %s", current_settings.polarity_invert ? "Инв" : "Норм");
-        snprintf(enc_str, sizeof(enc_str), "Энкодер: %s", current_settings.enc_direction_invert ? "Инв" : "Норм");
-        const char* choices[] = { "<-Назад", dac_str, fade_str, pol_str, enc_str, "СБРОС на заводские" };
-        renderMenu("ОБЩИЕ НАСТРОЙКИ", choices, 6, menu_selected);
+        snprintf(fade_str, sizeof(fade_str), "Плавный пуск: %.0fs", current_settings.fade_duration_sec);
+        snprintf(adc_str, sizeof(adc_str), "ADC mult: %.2f", current_settings.adc_multiplier);
+        snprintf(trns_str, sizeof(trns_str), "tRNS mult: %.2f", current_settings.trns_multiplier);        
+        const char* choices[] = { "<-Назад", enc_str, pol_str, dac_str, fade_str, adc_str, trns_str, "СБРОС на заводские" };
+        renderMenu("НАСТРОЙКИ", choices, 8, menu_selected);
       }
       break;
       

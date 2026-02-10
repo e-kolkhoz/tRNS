@@ -28,6 +28,16 @@
 #include "encoder_control.h"
 #include "session_control.h"
 #include "menu_control.h"
+#include <driver/rtc_io.h>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
+
+// Снимаем удержание BOOT_UF2 pin после перезагрузки,
+// чтобы плата нормально загружалась в приложение
+static void releaseBootUfh2Hold() {
+  rtc_gpio_hold_dis((gpio_num_t)BOOT_UF2_GPIO);
+  rtc_gpio_deinit((gpio_num_t)BOOT_UF2_GPIO);
+}
 
 // ============================================================================
 // === SETUP ===
@@ -36,6 +46,21 @@
 void setup() {
   // КРИТИЧНО: Задержка перед инициализацией Serial для esptool!
   delay(1000);
+
+  // Снимаем удержание BOOT_UF2 pin, если оно было включено
+  releaseBootUfh2Hold();
+
+  // Логи разметки/загрузки
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  const esp_partition_t* boot = esp_ota_get_boot_partition();
+  if (running) {
+    Serial.printf("[BOOT] running: %s addr=0x%08lx size=%lu\n",
+                  running->label, (unsigned long)running->address, (unsigned long)running->size);
+  }
+  if (boot) {
+    Serial.printf("[BOOT] boot: %s addr=0x%08lx size=%lu\n",
+                  boot->label, (unsigned long)boot->address, (unsigned long)boot->size);
+  }
   
   // Диагностика: LED для проверки старта
   pinMode(LED_BUILTIN, OUTPUT);

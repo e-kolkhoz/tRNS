@@ -1,11 +1,80 @@
 #include "menu_control.h"
 #include "session_control.h"
+#include "display_control.h"
+#include "esp32s2/rom/rtc.h"
+#include <esp_system.h>
+#include <rom/rtc.h>
+#include <driver/rtc_io.h>
+#include <esp_partition.h>
+#include <esp_ota_ops.h>
 
 // === FORWARD DECLARATIONS ===
 void executeMainMenuChoice();
 void executeSessionMenuChoice(StimMode mode);
 void executeSettingsMenuChoice();
 void openEditor(const char* name, float* value_ptr, float increment, float min_val, float max_val, bool is_int);
+
+// === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
+// Перезагрузка в TinyUF2 bootloader режим
+// Согласно документации ESP TinyUF2: https://docs.espressif.com/projects/esp-iot-solution/en/latest/usb/usb_device/esp_tinyuf2.html
+// Для ESP32-S2 надежный способ — удержать BOOT_UF2 pin в LOW через RTC IO hold
+// (обычно это GPIO0, если bootloader UF2 собран под Lolin S2 Mini)
+static void setStatusAndLog(const char* msg) {
+  Serial.println(msg);
+}
+
+void esp_restart_from_tinyuf2() {
+  setStatusAndLog("[UF2] Restart via BOOT_UF2 pin");
+  // Удерживаем BOOT_UF2 pin в LOW через RTC IO hold
+  rtc_gpio_init((gpio_num_t)BOOT_UF2_GPIO);
+  rtc_gpio_set_direction((gpio_num_t)BOOT_UF2_GPIO, RTC_GPIO_MODE_OUTPUT_ONLY);
+  rtc_gpio_set_level((gpio_num_t)BOOT_UF2_GPIO, 0);
+  rtc_gpio_hold_en((gpio_num_t)BOOT_UF2_GPIO);
+
+  // Дополнительно пишем магию в RTC_SLOW_MEM (на случай если bootloader проверяет там)
+  volatile uint32_t* rtc_slow_mem = (volatile uint32_t*)0x50000000;
+  *rtc_slow_mem = 0xf01669ef;
+  
+  // Синхронизация всех записей
+  __sync_synchronize();
+  
+  // Задержка для гарантии записи в RTC память
+  delay(100);
+  
+  // Перезагружаем систему
+  // Bootloader должен проверить RTC_CNTL_STORE0_REG или RTC_SLOW_MEM
+  // и войти в режим UF2 если значение совпадает
+  ESP.restart();
+}
+
+static void rebootToUF2Partition() {
+  const esp_partition_t* uf2 = esp_partition_find_first(
+      ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, "uf2");
+  if (!uf2) {
+    setStatusAndLog("[UF2] ERROR: uf2 partition not found");
+    esp_restart_from_tinyuf2();
+    return;
+  }
+
+  showUF2Instructions();
+  delay(200);
+
+  Serial.printf("[UF2] Found uf2 partition: label=%s addr=0x%08lx size=%lu\n",
+                uf2->label, (unsigned long)uf2->address, (unsigned long)uf2->size);
+  setStatusAndLog("[UF2] Boot to uf2 partition");
+
+  esp_err_t err = esp_ota_set_boot_partition(uf2);
+  if (err != ESP_OK) {
+    Serial.printf("[UF2] ERROR: set boot partition failed (%d)\n", (int)err);
+    setStatusAndLog("[UF2] ERROR: set boot failed");
+    esp_restart_from_tinyuf2();
+    return;
+  }
+
+  ESP.restart();
+}
+
+
 
 // === ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ===
 ScreenType screen_stack[4] = { SCR_MAIN_MENU };  // СТАРТУЕМ С ГЛАВНОГО МЕНЮ!
@@ -45,8 +114,7 @@ void handleRotate(int8_t delta) {
       break;
       
     case SCR_MAIN_MENU:
-      // Выбор: tRNS, tDCS, tACS, Общие настройки (4 опции, 0-3)
-      // Инвертируем: по часовой - вверх (меньший индекс)
+      // Выбор: tRNS, tDCS, tACS, Настройки (4 опции, 0-3)
       menu_selected = constrain(menu_selected - delta, 0, 3);
       break;
       
@@ -63,8 +131,8 @@ void handleRotate(int8_t delta) {
       break;
       
     case SCR_SETTINGS_MENU:
-      // Общие настройки: 8 опций (0-7)
-      menu_selected = constrain(menu_selected - delta, 0, 7);
+      // Общие настройки: 10 опций (0-9)
+      menu_selected = constrain(menu_selected - delta, 0, 9);
       break;
       
     case SCR_EDITOR:
@@ -164,18 +232,10 @@ void handleClick() {
 // === ВЫПОЛНЕНИЕ ВЫБОРА В ГЛАВНОМ МЕНЮ ===
 void executeMainMenuChoice() {
   switch (menu_selected) {
-    case 0:  // tRNS
-      pushScreen(SCR_TRNS_MENU);
-      break;
-    case 1:  // tDCS
-      pushScreen(SCR_TDCS_MENU);
-      break;
-    case 2:  // tACS
-      pushScreen(SCR_TACS_MENU);
-      break;
-    case 3:  // Общие настройки
-      pushScreen(SCR_SETTINGS_MENU);
-      break;
+    case 0: pushScreen(SCR_TRNS_MENU); break;
+    case 1: pushScreen(SCR_TDCS_MENU); break;
+    case 2: pushScreen(SCR_TACS_MENU); break;
+    case 3: pushScreen(SCR_SETTINGS_MENU); break;
   }
 }
 
@@ -306,6 +366,12 @@ void executeSettingsMenuChoice() {
     case 7:  // Сбросить на заводские
       resetToDefaults();
       popScreen();  // Вернуться в главное меню
+      break;
+    case 8:  // Версия (только просмотр)
+      break;
+    case 9:  // Обновление прошивки → TinyUF2 bootloader
+      Serial.printf("[UF2] Menu update click, screen=%d, selected=%d\n", current_screen, menu_selected);
+      rebootToUF2Partition();
       break;
   }
 }

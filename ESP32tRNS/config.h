@@ -9,6 +9,10 @@
 // === TIMING CONFIG ===
 #define SAMPLE_RATE         8000
 
+// === BOOTLOADER UF2 ===
+// GPIO для входа в UF2 bootloader (BOOT_UF2 pin). Для Lolin S2 Mini это GPIO0.
+#define BOOT_UF2_GPIO       0
+
 // Буфер DAC: 16384 сэмпла (2.048 сек @ 8kHz) - FFT-friendly размер (степень 2)
 // ВАЖНО: Храним МОНО знаковый сигнал, преобразуем в СТЕРЕО sign-magnitude для H-моста
 // Правый канал = модуль (abs), Левый канал = знак (32767=pos, 0=neg)

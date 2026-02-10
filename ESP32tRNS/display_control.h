@@ -28,5 +28,8 @@ void renderCurrentScreen();
 // Показать экран загрузки с шагом инициализации
 void showBootScreen(const char* step);
 
+// Показать инструкцию перед переходом в UF2
+void showUF2Instructions();
+
 #endif // DISPLAY_CONTROL_H
 

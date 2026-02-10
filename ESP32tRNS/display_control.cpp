@@ -4,6 +4,7 @@
 #include "adc_calibration.h"
 #include "menu_control.h"
 #include "session_control.h"
+#include "version.h"
 #include <Wire.h>
 #include <U8g2lib.h>
 #include <math.h>
@@ -14,7 +15,7 @@
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 
 // Статус устройства для отображения
-static char device_status[32] = "Ready";
+static char device_status[32] = "";
 static uint32_t last_display_update = 0;
 static const uint32_t DISPLAY_UPDATE_INTERVAL_MS = 200;  // Обновление каждые 500 мс — чтобы не блокировать DAC!
 
@@ -38,7 +39,10 @@ void initDisplay() {
   u8g2.setFont(u8g2_font_9x15_t_cyrillic);
   u8g2.drawStr(10, 10, "tRNS/tACS");
   u8g2.setFont(u8g2_font_6x12_t_cyrillic);
-  u8g2.drawStr(20, 35, "Booting...");
+  u8g2.drawStr(20, 28, "Booting...");
+  // Версия прошивки внизу
+  u8g2.setFont(u8g2_font_5x7_tr);
+  u8g2.drawStr(0, 56, FIRMWARE_VERSION);
   u8g2.sendBuffer();
 }
 
@@ -61,6 +65,17 @@ void showBootScreen(const char* step) {
   }
   u8g2.drawStr(0, 35, progress);
   
+  u8g2.sendBuffer();
+}
+
+// Показать инструкцию перед переходом в UF2
+void showUF2Instructions() {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x12_t_cyrillic);
+  u8g2.setCursor(0, 0); u8g2.print("РЕЖИМ ПРОШИВКИ");
+  u8g2.setCursor(0, 12); u8g2.print("Положите на");
+  u8g2.setCursor(0, 24); u8g2.print("S2MINIBOOT");
+  u8g2.setCursor(0, 36); u8g2.print("файл прошивки *.UF2");
   u8g2.sendBuffer();
 }
 
@@ -383,7 +398,7 @@ void renderMenu(const char* title, const char* choices[], uint8_t num_choices, u
       u8g2.drawTriangle(124, 62, 120, 58, 128, 58);  // ▼ внизу
     }
   }
-  
+
   u8g2.sendBuffer();
 }
 
@@ -442,7 +457,7 @@ void renderCurrentScreen() {
       
     case SCR_MAIN_MENU:
       {
-        const char* choices[] = { "tRNS", "tDCS", "tACS", "Общие настройки" };
+        const char* choices[] = { "tRNS", "tDCS", "tACS", "Настройки" };
         renderMenu("Главное меню", choices, 4, menu_selected);
       }
       break;
@@ -480,15 +495,16 @@ void renderCurrentScreen() {
       
     case SCR_SETTINGS_MENU:
       {
-        static char dac_str[32], fade_str[32], adc_str[32], trns_str[32], pol_str[32], enc_str[32];
+        static char dac_str[32], fade_str[32], adc_str[32], trns_str[32], pol_str[32], enc_str[32], ver_str[32];
         snprintf(enc_str, sizeof(enc_str), "Энкодер: %s", current_settings.enc_direction_invert ? "Инв." : "Норм.");
         snprintf(pol_str, sizeof(pol_str), "Полярность: %s", current_settings.polarity_invert ? "Инв." : "Норм.");
         snprintf(dac_str, sizeof(dac_str), "DAC коды/мА: %.0f", current_settings.dac_code_to_mA);
         snprintf(fade_str, sizeof(fade_str), "Плавный пуск: %.0fs", current_settings.fade_duration_sec);
         snprintf(adc_str, sizeof(adc_str), "ADC mult: %.2f", current_settings.adc_multiplier);
-        snprintf(trns_str, sizeof(trns_str), "tRNS mult: %.2f", current_settings.trns_multiplier);        
-        const char* choices[] = { "<-Назад", enc_str, pol_str, dac_str, fade_str, adc_str, trns_str, "СБРОС на заводские" };
-        renderMenu("НАСТРОЙКИ", choices, 8, menu_selected);
+        snprintf(trns_str, sizeof(trns_str), "tRNS mult: %.2f", current_settings.trns_multiplier);
+        snprintf(ver_str, sizeof(ver_str), "v%s", FIRMWARE_VERSION);
+        const char* choices[] = { "<-Назад", enc_str, pol_str, dac_str, fade_str, adc_str, trns_str, "СБРОС на заводские", ver_str, ">>> ОБНОВЛЕНИЕ <<<" };
+        renderMenu("НАСТРОЙКИ", choices, 10, menu_selected);
       }
       break;
       

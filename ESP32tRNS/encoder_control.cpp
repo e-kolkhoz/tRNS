@@ -12,6 +12,7 @@ static const uint32_t BUTTON_DEBOUNCE_MS = 300;  // 300мс между клик�
 
 // Флаг клика (из ISR в loop)
 static volatile bool pending_click = false;
+static bool button_armed = true;
 
 // ISR функция для обработки прерываний от энкодера (вращение)
 void IRAM_ATTR encoderISR() {
@@ -46,6 +47,11 @@ void initEncoder() {
 // Опрос энкодера (вызывать в loop)
 void updateEncoder() {
   enc.tick();
+
+  // Разрешаем новый клик только после отпускания кнопки
+  if (digitalRead(ENC_KEY) == HIGH) {
+    button_armed = true;
+  }
   
   // === Вращение ===
   int8_t enc_dir = current_settings.enc_direction_invert ? -1 : 1;
@@ -66,8 +72,9 @@ void updateEncoder() {
     
     // Проверяем debounce
     if (elapsed >= BUTTON_DEBOUNCE_MS) {
-      // Дополнительная проверка: кнопка РЕАЛЬНО нажата?
-      if (digitalRead(ENC_KEY) == LOW) {
+      // Дополнительная проверка: кнопка РЕАЛЬНО нажата и мы "вооружены"
+      if (button_armed && digitalRead(ENC_KEY) == LOW) {
+        button_armed = false;  // до отпускания
         last_button_time_ms = now_ms;
         Serial.printf("[ENC] CLICK! (elapsed=%lu ms)\n", elapsed);
         handleClick();

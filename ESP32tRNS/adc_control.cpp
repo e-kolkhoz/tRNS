@@ -1,4 +1,7 @@
 #include "adc_control.h"
+#include "adc_calibration.h"
+#include "session_control.h"
+#include "dac_control.h"  // для dynamic_dac_gain
 
 // Глобальные переменные
 adc_continuous_handle_t adc_handle = NULL;
@@ -14,6 +17,7 @@ static uint32_t adc_capture_resume_ms = 0;
 static int16_t ma_buffer[3] = {0, 0, 0};  // Кольцевой буфер на 3 элемента
 static uint8_t ma_index = 0;              // Позиция записи
 static float ma_avg = 0.0f;               // Текущее среднее
+static uint32_t last_sign_warn_ms = 0;
 
 // Вспомогательная функция для сброса буфера ADC в запрещенное значение
 static void resetADCRingBufferInternal() {
@@ -98,6 +102,11 @@ static bool IRAM_ATTR adc_dma_conv_done_callback(
 void initADC() {
   resetADCRingBufferInternal();
   
+  // Включаем внутренний pull-down на входе magnitude
+  // Это притягивает вход к GND при разрыве цепи (вместо болтанки)
+  // ~45кОм внутренний резистор — должен помочь от наводок
+  // gpio_set_pull_mode((gpio_num_t)ADC_MOD_PIN, GPIO_PULLDOWN_ONLY);
+  
   // Конфигурация continuous mode
   adc_continuous_handle_cfg_t adc_config = {
     .max_store_buf_size = ADC_FRAME_SIZE * ADC_DMA_BUF_COUNT * SOC_ADC_DIGI_DATA_BYTES_PER_CONV,
@@ -106,18 +115,25 @@ void initADC() {
   
   ESP_ERROR_CHECK(adc_continuous_new_handle(&adc_config, &adc_handle));
   
-  // Настройка паттерна (какой канал читать)
-  adc_digi_pattern_config_t adc_pattern = {
-    .atten = ADC_ATTEN_DB_0,      // 0-1.1V для 0.3-0.7V сигнала
-    .channel = ADC_CHANNEL,
-    .unit = ADC_UNIT,
-    .bit_width = SOC_ADC_DIGI_MAX_BITWIDTH,  // 12-bit
-  };
+  // Настройка паттерна: 2 канала (sign + magnitude) синхронно
+  adc_digi_pattern_config_t adc_pattern[2];
+  
+  // Канал 0: знак (sign) - всегда 0-3.3V
+  adc_pattern[0].atten = ADC_ATTEN_DB_11;
+  adc_pattern[0].channel = ADC_SIGN_CHANNEL;
+  adc_pattern[0].unit = ADC_UNIT;
+  adc_pattern[0].bit_width = ADC_BITWIDTH;  // Из config.h (10 бит — меньше шума)
+  
+  // Канал 1: модуль (magnitude) - настраиваемый диапазон
+  adc_pattern[1].atten = ADC_MOD_ATTEN;
+  adc_pattern[1].channel = ADC_MOD_CHANNEL;
+  adc_pattern[1].unit = ADC_UNIT;
+  adc_pattern[1].bit_width = ADC_BITWIDTH;  // Из config.h (10 бит — меньше шума)
   
   adc_continuous_config_t dig_cfg = {
-    .pattern_num = 1,
-    .adc_pattern = &adc_pattern,
-    .sample_freq_hz = ADC_SAMPLE_RATE,
+    .pattern_num = 2,  // 2 канала!
+    .adc_pattern = adc_pattern,
+    .sample_freq_hz = ADC_SAMPLE_RATE * 2,  // ×2 потому что 2 канала
     .conv_mode = ADC_CONV_SINGLE_UNIT_1,
     .format = ADC_DIGI_OUTPUT_FORMAT_TYPE1,
   };
@@ -150,25 +166,58 @@ void readADCFromDMA() {
   esp_err_t ret = adc_continuous_read(adc_handle, dma_buffer, sizeof(dma_buffer), 
                                        &bytes_read, ADC_READ_TIMEOUT_MS);
   
-  if (ret == ESP_OK && bytes_read > 0) {
+  if (ret == ESP_OK && bytes_read > 0 && adc_capture_enabled) {
     // Парсим данные из DMA буфера
+    // DMA возвращает данные чередуя каналы: sign, mag, sign, mag, ...
     uint32_t samples_read = bytes_read / SOC_ADC_DIGI_DATA_BYTES_PER_CONV;
+    
+    uint16_t sign_value = 0;
+    uint16_t mag_value = 0;
+    bool has_sign = false;
+    bool has_mag = false;
     
     for (uint32_t i = 0; i < samples_read; i++) {
       adc_digi_output_data_t *p = (adc_digi_output_data_t*)&dma_buffer[i * SOC_ADC_DIGI_DATA_BYTES_PER_CONV];
       
-      // Извлекаем 12-битное значение
       uint32_t chan_num = p->type1.channel;
       uint32_t data = p->type1.data;
       
-      // Проверяем что это наш канал
-      if (chan_num == ADC_CHANNEL && adc_capture_enabled) {
-        // Применяем скользящее среднее (фильтр [1/3, 1/3, 1/3])
-        int16_t filtered = applyMovingAverage((int16_t)data);
+      // Собираем пару (sign, magnitude)
+      if (chan_num == ADC_SIGN_CHANNEL) {
+        sign_value = data;
+        has_sign = true;
+      } else if (chan_num == ADC_MOD_CHANNEL) {
+        mag_value = data;
+        has_mag = true;
+      }
+      
+      // Когда собрали пару - реконструируем знаковый сигнал
+      if (has_sign && has_mag) {
+        // Определяем знак: если sign > порога, то положительный
+        bool is_positive = (sign_value > ADC_SIGN_THRESHOLD);
+        // Отсекаем аномалии: > 2700 кодов = шум/разрыв цепи (вне калибровки)
+        if (mag_value > 2700) {
+          mag_value = 0;  // Пропускаем мусор, тока нет
+        }
+
+        // Применяем инверсию полярности (если электроды перепутаны)
+        if (current_settings.polarity_invert) {
+          is_positive = !is_positive;
+        }
         
-        // Записываем отфильтрованное значение в кольцевой буфер
+        // Реконструируем знаковый сигнал
+        int16_t signed_value = is_positive ? (int16_t)mag_value : -(int16_t)mag_value;
+        
+        // Применяем скользящее среднее (фильтр [1/3, 1/3, 1/3])
+        int16_t filtered = applyMovingAverage(signed_value);
+        
+        // Записываем в кольцевой буфер
         adc_ring_buffer[adc_write_index] = filtered;
         adc_write_index = (adc_write_index + 1) % ADC_RING_SIZE;
+        
+        // Сбрасываем флаги для следующей пары
+        has_sign = false;
+        has_mag = false;
       }
     }
   } else if (ret == ESP_ERR_TIMEOUT) {
@@ -196,12 +245,11 @@ void getADCRingBuffer(int16_t* output_buffer, uint32_t* current_write_pos) {
 
 // Печать статистики ADC буфера (для отладки)
 void printADCStats() {
-  
-  // Вычисляем статистику (пропускаем запрещенные значения)
-  uint32_t sum = 0;
+  // Вычисляем статистику знаковых значений (пропускаем запрещенные)
+  int32_t sum = 0;
   uint32_t valid_count = 0;
-  int16_t min_val = 4095;
-  int16_t max_val = 0;
+  int16_t min_val = ADC_MAX_VALUE;
+  int16_t max_val = -ADC_MAX_VALUE;
   
   for (uint32_t i = 0; i < ADC_RING_SIZE; i++) {
     if (adc_ring_buffer[i] == ADC_INVALID_VALUE) continue;
@@ -216,12 +264,12 @@ void printADCStats() {
     return;
   }
   
+  // Среднее и размах знакового сигнала
   int16_t avg = sum / valid_count;
-  // Для ADC_ATTEN_DB_0: диапазон 0-1.1V
-  float voltage_avg = (avg / 4095.0) * 1.1;
-  float voltage_min = (min_val / 4095.0) * 1.1;
-  float voltage_max = (max_val / 4095.0) * 1.1;
-
+  // Конвертация в напряжение: знаковый ADC → [-ADC_MAX_VOLTAGE, +ADC_MAX_VOLTAGE]
+  float voltage_avg = (avg / (float)ADC_MAX_VALUE) * ADC_MAX_VOLTAGE;
+  float voltage_min = (min_val / (float)ADC_MAX_VALUE) * ADC_MAX_VOLTAGE;
+  float voltage_max = (max_val / (float)ADC_MAX_VALUE) * ADC_MAX_VOLTAGE;
 }
 
 // Получить минимальное и максимальное напряжение с ADC (в вольтах)
@@ -253,8 +301,9 @@ bool getADCMinMaxVoltage(float* min_voltage, float* max_voltage) {
   
   free(temp_buffer);
   
-  *min_voltage = (min_val / 4095.0f) * 1.1f;
-  *max_voltage = (max_val / 4095.0f) * 1.1f;
+  // Конвертация знакового ADC в напряжение
+  *min_voltage = (min_val / (float)ADC_MAX_VALUE) * ADC_MAX_VOLTAGE;
+  *max_voltage = (max_val / (float)ADC_MAX_VALUE) * ADC_MAX_VOLTAGE;
   return true;
 }
 
@@ -329,7 +378,8 @@ bool getADCPercentiles(float* p1_voltage, float* p99_voltage, float* mean_voltag
   for (uint32_t i = 0; i < valid_count; i++) {
     sum += temp_buffer[i];
   }
-  *mean_voltage = (float)((sum / valid_count / 4095.0) * 1.1);
+  // Конвертация знакового ADC в напряжение
+  *mean_voltage = (float)((sum / valid_count / (double)ADC_MAX_VALUE) * ADC_MAX_VOLTAGE);
   
   uint32_t p1_index = valid_count / 100;
   uint32_t p99_index = (valid_count * 99) / 100;
@@ -345,8 +395,9 @@ bool getADCPercentiles(float* p1_voltage, float* p99_voltage, float* mean_voltag
     int16_t p1_val = quickselect(temp_p1, 0, valid_count - 1, p1_index);
     int16_t p99_val = quickselect(temp_p99, 0, valid_count - 1, p99_index);
     
-    *p1_voltage = (p1_val / 4095.0f) * 1.1f;
-    *p99_voltage = (p99_val / 4095.0f) * 1.1f;
+    // Конвертация знакового ADC в напряжение
+    *p1_voltage = (p1_val / (float)ADC_MAX_VALUE) * ADC_MAX_VOLTAGE;
+    *p99_voltage = (p99_val / (float)ADC_MAX_VALUE) * ADC_MAX_VOLTAGE;
     
     free(temp_p1);
     free(temp_p99);
@@ -358,8 +409,73 @@ bool getADCPercentiles(float* p1_voltage, float* p99_voltage, float* mean_voltag
       if (temp_buffer[i] < min_val) min_val = temp_buffer[i];
       if (temp_buffer[i] > max_val) max_val = temp_buffer[i];
     }
-    *p1_voltage = (min_val / 4095.0f) * 1.1f;
-    *p99_voltage = (max_val / 4095.0f) * 1.1f;
+    // Конвертация знакового ADC в напряжение
+    *p1_voltage = (min_val / (float)ADC_MAX_VALUE) * ADC_MAX_VOLTAGE;
+    *p99_voltage = (max_val / (float)ADC_MAX_VALUE) * ADC_MAX_VOLTAGE;
+    
+    if (temp_p1 != NULL) free(temp_p1);
+    if (temp_p99 != NULL) free(temp_p99);
+  }
+  
+  free(temp_buffer);
+  return true;
+}
+
+// Получить перцентили (1%, 99%) и среднее в RAW ADC кодах (знаковые!)
+bool getADCPercentilesRaw(int16_t* p1_raw, int16_t* p99_raw, int16_t* mean_raw) {
+  if (p1_raw == NULL || p99_raw == NULL || mean_raw == NULL) {
+    return false;
+  }
+  
+  uint32_t window = getStatsWindowSize();
+  int16_t* temp_buffer = (int16_t*)malloc(window * sizeof(int16_t));
+  if (temp_buffer == NULL) {
+    return false;
+  }
+  
+  uint32_t valid_count = collectRecentSamples(temp_buffer, window);
+  if (valid_count == 0) {
+    free(temp_buffer);
+    *p1_raw = 0;
+    *p99_raw = 0;
+    *mean_raw = 0;
+    return false;
+  }
+  
+  // Среднее
+  int32_t sum = 0;
+  for (uint32_t i = 0; i < valid_count; i++) {
+    sum += temp_buffer[i];
+  }
+  *mean_raw = (int16_t)(sum / (int32_t)valid_count);
+  
+  // Перцентили
+  uint32_t p1_index = valid_count / 100;
+  uint32_t p99_index = (valid_count * 99) / 100;
+  if (p1_index >= valid_count) p1_index = 0;
+  if (p99_index >= valid_count) p99_index = valid_count - 1;
+  
+  int16_t* temp_p1 = (int16_t*)malloc(valid_count * sizeof(int16_t));
+  int16_t* temp_p99 = (int16_t*)malloc(valid_count * sizeof(int16_t));
+  if (temp_p1 != NULL && temp_p99 != NULL) {
+    memcpy(temp_p1, temp_buffer, valid_count * sizeof(int16_t));
+    memcpy(temp_p99, temp_buffer, valid_count * sizeof(int16_t));
+    
+    *p1_raw = quickselect(temp_p1, 0, valid_count - 1, p1_index);
+    *p99_raw = quickselect(temp_p99, 0, valid_count - 1, p99_index);
+    
+    free(temp_p1);
+    free(temp_p99);
+  } else {
+    // Fallback на min/max
+    int16_t min_val = temp_buffer[0];
+    int16_t max_val = temp_buffer[0];
+    for (uint32_t i = 1; i < valid_count; i++) {
+      if (temp_buffer[i] < min_val) min_val = temp_buffer[i];
+      if (temp_buffer[i] > max_val) max_val = temp_buffer[i];
+    }
+    *p1_raw = min_val;
+    *p99_raw = max_val;
     
     if (temp_p1 != NULL) free(temp_p1);
     if (temp_p99 != NULL) free(temp_p99);
@@ -392,25 +508,26 @@ bool buildADCHistogram(uint16_t* bins, uint8_t num_bins) {
     return false;
   }
   
-  int16_t min_val = temp_buffer[0];
-  int16_t max_val = temp_buffer[0];
+  // Преобразуем в mA через калибровку и находим min/max
+  float min_mA = adcSignedToMilliamps(temp_buffer[0]);
+  float max_mA = min_mA;
   for (uint32_t i = 1; i < valid_count; i++) {
-    if (temp_buffer[i] < min_val) min_val = temp_buffer[i];
-    if (temp_buffer[i] > max_val) max_val = temp_buffer[i];
+    float mA = adcSignedToMilliamps(temp_buffer[i]);
+    if (mA < min_mA) min_mA = mA;
+    if (mA > max_mA) max_mA = mA;
   }
-
-  if(min_val > ADC_MAX_LOW_HIST_VAL) min_val = ADC_MAX_LOW_HIST_VAL;
-  if(max_val < ADC_MIN_HI_HIST_VAL)  max_val = ADC_MIN_HI_HIST_VAL;
   
-  
-  if (min_val == max_val) {
+  // Все значения одинаковые (например, tDCS) - все в средний столбец
+  if (max_mA - min_mA < 0.001f) {
+    bins[num_bins / 2] = valid_count;
     free(temp_buffer);
-    return false;
+    return true;
   }
   
-  float range = max_val - min_val;
+  float range = max_mA - min_mA;
   for (uint32_t i = 0; i < valid_count; i++) {
-    float normalized = (temp_buffer[i] - min_val) / range;
+    float mA = adcSignedToMilliamps(temp_buffer[i]);
+    float normalized = (mA - min_mA) / range;
     uint8_t bin_index = (uint8_t)(normalized * num_bins);
     if (bin_index >= num_bins) bin_index = num_bins - 1;
     bins[bin_index]++;
@@ -425,5 +542,21 @@ void scheduleADCCaptureStart(uint32_t delay_ms) {
   adc_capture_enabled = false;
   adc_capture_pending = true;
   adc_capture_resume_ms = millis() + delay_ms;
+}
+
+// Вывод буфера в Serial для Arduino Plotter
+void dumpADCToSerial(uint16_t decimation) {
+  if (decimation == 0) decimation = 1;
+  
+  uint32_t write_idx = adc_write_index;  // Снимок текущей позиции
+  
+  // Выводим от старых к новым (по кругу от write_idx)
+  for (uint32_t i = 0; i < ADC_RING_SIZE; i += decimation) {
+    uint32_t idx = (write_idx + i) % ADC_RING_SIZE;
+    int16_t val = adc_ring_buffer[idx];
+    if (val != ADC_INVALID_VALUE) {
+      Serial.println(val);
+    }
+  }
 }
 

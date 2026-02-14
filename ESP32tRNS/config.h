@@ -154,7 +154,7 @@
 #define ADC_MULTIPLIER_INCREMENT  0.01f
 
 // Доп множитель для tRNS, подтягиваем амплитуду к 3sigma
-#define DEF_TRNS_MULTIPLIER       1.35f
+#define DEF_TRNS_MULTIPLIER       1.2f
 #define MIN_TRNS_MULTIPLIER       1.00f
 #define MAX_TRNS_MULTIPLIER       1.80f
 #define TRNS_MULTIPLIER_INCREMENT 0.01f

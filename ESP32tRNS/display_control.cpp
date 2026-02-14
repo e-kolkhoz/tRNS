@@ -243,7 +243,8 @@ static void renderDashboardTRNS() {
   float sigma = sqrtf(rms_mA * rms_mA - mean_mA * mean_mA);
   
   char metric[16];
-  snprintf(metric, sizeof(metric), "%.1fmA", sigma * 3);
+  // какая-то магическая константа вместо 3сигма -> 3.38сигма, потому что распределение не совсем гауссовое
+  snprintf(metric, sizeof(metric), "%.1fmA", sigma * 3.38);
   drawMetricsAndProgress(metric);
 }
 

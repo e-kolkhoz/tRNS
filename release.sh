@@ -23,19 +23,6 @@ cat > "$SCRIPT_DIR/ESP32tRNS/version.h" << EOF
 #endif
 EOF
 
-# === СНАЧАЛА ТЭГ, ПОТОМ БИЛД ===
-if [[ "$1" != "--no-tag" ]] && git rev-parse --is-inside-work-tree &>/dev/null; then
-  TAG="v${VERSION}"
-  git tag -l | grep -q "^${TAG}$" && { echo "Tag $TAG exists locally!"; exit 1; }
-  git ls-remote --tags origin 2>/dev/null | grep -q "refs/tags/${TAG}$" && { echo "Tag $TAG exists on remote!"; exit 1; }
-  
-  git add "$SCRIPT_DIR/ESP32tRNS/version.h"
-  git diff --cached --quiet || git commit -m "chore: v${FULL}"
-  git tag -a "$TAG" -m "Release $FULL"
-  git push origin "$TAG"
-  echo "Tagged: $TAG"
-fi
-
 # Build
 if command -v arduino-cli &>/dev/null; then
   mkdir -p "$SCRIPT_DIR/build"
@@ -71,4 +58,17 @@ if command -v arduino-cli &>/dev/null; then
   echo "✓ Built: build/firmware-${FULL}.uf2"
   echo ""
   echo "To flash: copy firmware.uf2 to S2MINIBOOT drive"
+fi
+
+# === СНАЧАЛА БИЛД, ПОТОМ КОММИТ/ТЭГ ===
+if [[ "$1" != "--no-tag" ]] && git rev-parse --is-inside-work-tree &>/dev/null; then
+  TAG="v${VERSION}"
+  git tag -l | grep -q "^${TAG}$" && { echo "Tag $TAG exists locally!"; exit 1; }
+  git ls-remote --tags origin 2>/dev/null | grep -q "refs/tags/${TAG}$" && { echo "Tag $TAG exists on remote!"; exit 1; }
+
+  git add "$SCRIPT_DIR/ESP32tRNS/version.h"
+  git diff --cached --quiet || git commit -m "chore: v${FULL}"
+  git tag -a "$TAG" -m "Release $FULL"
+  git push origin "$TAG"
+  echo "Tagged: $TAG"
 fi

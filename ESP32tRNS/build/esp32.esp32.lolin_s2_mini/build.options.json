@@ -1,0 +1,9 @@
+{
+  "additionalFiles": "../..,../..,../..,../..,../..,../..,../..,../..,../..,../..,../..,../..,../..,../..,../..,../..,../..,../..,../..,../..",
+  "compiler.optimization_flags": "-Os",
+  "customBuildProperties": "upload.maximum_size=2883584",
+  "fqbn": "esp32:esp32:lolin_s2_mini:CDCOnBoot=default",
+  "hardwareFolders": "/home/sk/.arduino15/packages/esp32/hardware/esp32/3.3.6,/home/sk/.arduino15/packages/esp32/hardware/esp32/3.3.6",
+  "otherLibrariesFolders": "/home/sk/Arduino/libraries",
+  "sketchLocation": "/home/sk/Yandex.Disk/Obsidian Vault/tPRNS/tRNS/ESP32tRNS"
+}

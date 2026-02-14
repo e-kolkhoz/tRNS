@@ -66,8 +66,10 @@ if [[ "$1" != "--no-tag" ]] && git rev-parse --is-inside-work-tree &>/dev/null; 
   git tag -l | grep -q "^${TAG}$" && { echo "Tag $TAG exists locally!"; exit 1; }
   git ls-remote --tags origin 2>/dev/null | grep -q "refs/tags/${TAG}$" && { echo "Tag $TAG exists on remote!"; exit 1; }
 
-  git add "$SCRIPT_DIR/ESP32tRNS/version.h"
-  git diff --cached --quiet || git commit -m "chore: v${FULL}"
+  # Стаджим все изменения (build/ уже в .gitignore)
+  git add -A
+  git diff --cached --quiet && { echo "Nothing to commit, skipping tag."; exit 0; }
+  git commit -m "chore: v${FULL}"
   git tag -a "$TAG" -m "Release $FULL"
   git push origin "$TAG"
   echo "Tagged: $TAG"

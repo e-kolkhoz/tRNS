@@ -4,6 +4,7 @@
 
 Требуемые библиотеки:
 - U8g2 (для OLED дисплея): установить через Library Manager в Arduino IDE
+- EncButton от Алекса Гайвера: установить через Library Manager в Arduino IDE 
 
 Авторский разбор проекта на Хабре:
 [https://habr.com/ru/articles/981086/](https://habr.com/ru/articles/981086/)

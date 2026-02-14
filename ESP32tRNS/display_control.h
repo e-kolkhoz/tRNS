@@ -22,11 +22,14 @@ void setDisplayStatus(const char* status);
 // Принудительное обновление дисплея (для критичных изменений)
 void refreshDisplay();
 
-// Сбросить таймер отображения (отсчёт времени на экране)
-void resetDisplayTimer();
+// Рендеринг текущего экрана (из menu_control)
+void renderCurrentScreen();
 
 // Показать экран загрузки с шагом инициализации
 void showBootScreen(const char* step);
+
+// Показать инструкцию перед переходом в UF2
+void showUF2Instructions();
 
 #endif // DISPLAY_CONTROL_H
 

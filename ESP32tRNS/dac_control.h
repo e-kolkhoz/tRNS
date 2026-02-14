@@ -14,11 +14,14 @@
 extern int16_t* signal_buffer;  // МОНО: SIGNAL_SAMPLES
 extern bool dma_prefilled;
 
-// Имя текущего пресета (например, "tACS 640Hz 1mA demo")
+// Имя текущего пресета (например, "tACS 250Hz 1mA demo")
 extern char current_preset_name[PRESET_NAME_MAX_LEN];
 
-// Коэффициент усиления (gain) для правого канала
-extern float dac_gain;
+// Динамический коэффициент усиления (меняется на лету для fadein/fadeout)
+// fadein: 0.0 → 1.0, stable: 1.0, fadeout: 1.0 → 0.0
+extern float dynamic_dac_gain;
+// Масштаб амплитуды (0..1) для мА → код DAC
+void setAmplitudeScale(float scale);
 
 // Инициализация I2S и DMA для DAC
 void initDAC();
@@ -29,17 +32,24 @@ void initDAC();
 // num_samples - количество МОНО-сэмплов (для стерео нужно умножить на 2)
 void setSignalBuffer(int16_t* new_buffer, int num_samples);
 
-// Генерация демо-сигнала (синус 640 Гц) - для отладки
-void generateDemoSignal();
-
 // === DMA УПРАВЛЕНИЕ ===
-
 // Предзаполнение DMA буферов
 void prefillDMABuffers();
 
 // Поддержание DMA буферов заполненными (неблокирующе!)
 // Возвращает true, если новый фрагмент удалось поставить в DMA
 bool keepDMAFilled();
+
+// Обновить стерео-буфер после изменения signal_buffer
+// ВАЖНО: вызывать после generateSignal()!
+void updateStereoBuffer();
+
+// Полный сброс DAC DMA и повторное заполнение буфера
+void resetDacPlayback();
+
+// Управление I2S выходом (старт/стоп)
+void startDacPlayback();
+void stopDacPlayback();
 
 #endif // DAC_CONTROL_H
 

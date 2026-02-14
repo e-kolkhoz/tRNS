@@ -1,4 +1,13 @@
 *.pcl
 *.ipynb_checkpoints
-*.bin
+# *.bin
 *.pyc
+
+# Build output
+build/
+*.elf
+*.map
+
+# UF2 tools
+uf2conv.py
+uf2families.json

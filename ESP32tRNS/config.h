@@ -104,7 +104,7 @@
 
 // === POLARITY INVERSION (для случая перепутанных электродов) ===
 // Если катод и анод перепутаны - меняй на true, перепрошей, готово!
-#define DEF_POLARITY_INVERT     true  // true = инвертировать знак на DAC и ADC
+#define DEF_POLARITY_INVERT     false  // true = инвертировать знак на DAC и ADC
 
 // Максимальная длина имени пресета
 #define PRESET_NAME_MAX_LEN     128

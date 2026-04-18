@@ -3,7 +3,7 @@ import argparse
 import math
 import os
 import struct
-import sys
+# import sys
 
 UF2_MAGIC_START0 = 0x0A324655
 UF2_MAGIC_START1 = 0x9E5D5157

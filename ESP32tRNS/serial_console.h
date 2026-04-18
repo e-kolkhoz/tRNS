@@ -1,4 +1,5 @@
 #pragma once
+#include <Arduino.h>
 
 // Dev-only serial command processor.
 // Чтобы исключить из прода — закомментируй строку ниже или передай -DSERIAL_CONSOLE=0

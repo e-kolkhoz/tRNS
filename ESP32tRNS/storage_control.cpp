@@ -5,8 +5,8 @@ bool StorageControl::_ready = false;
 
 bool StorageControl::begin() {
     // Партиция называется "ffat" — передаём явно, иначе FFat ищет первую fat-партицию
-    if (!FFat.begin(false, "/ffat", 10, "ffat")) {
-        Serial.println("[STORAGE] FFat mount FAILED");
+    if (!FFat.begin(true, "/ffat", 10, "ffat")) {
+        Serial.println("[STORAGE] FFat mount FAILED (format also failed)");
         _ready = false;
         return false;
     }

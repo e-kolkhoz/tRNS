@@ -25,6 +25,7 @@ void SerialConsole::update() {
 }
 
 void SerialConsole::processCommand(const String& cmd) {
+    Serial.printf("> %s\n", cmd.c_str());
     if (cmd == "UF2") {
         BootControl::rebootToUF2();
 

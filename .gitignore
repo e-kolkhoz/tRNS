@@ -8,6 +8,4 @@ build/
 *.elf
 *.map
 
-# UF2 tools
-# uf2conv.py
-# uf2families.json
+# UF2 tools (uf2conv.py — в репо, не игнорируем)

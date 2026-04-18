@@ -6,6 +6,7 @@
 #include <esp_partition.h>
 #include "boot_control.h"
 #include "storage_control.h"
+#include "usb_flash.h"
 
 String SerialConsole::_buf;
 
@@ -52,6 +53,10 @@ void SerialConsole::processCommand(const String& cmd) {
 
     } else if (cmd == "DF") {
         StorageControl::printUsage();
+
+    } else if (cmd == "MSC") {
+        Serial.println("[CMD] MSC mode temporarily disabled.");
+        // USBFlash::rebootToMSC();
 
     } else {
         Serial.println("[CMD] Commands: UF2  RESET  INFO  LS  DF");

@@ -7,6 +7,7 @@
 class StorageControl {
 public:
     static bool begin();
+    static void end();   // Размонтировать (нужно перед активацией MSC)
     static bool isReady();
 
     static void listFiles(const char* path = "/");

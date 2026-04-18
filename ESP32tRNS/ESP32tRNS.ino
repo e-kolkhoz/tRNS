@@ -1,54 +1,29 @@
 // ============================================================================
-// === ESP32-S3FH4R2  ===
+// === ESP32-S3FH4R2 / Waveshare ESP32-S3-Zero ===
 // ============================================================================
-
-#include <EEPROM.h>
-#include <esp_ota_ops.h>
-#include <esp_partition.h>
+//
+// ТЕСТ: голый minimal для проверки MSC после TinyUF2 auto-reboot.
+// Нет Serial, нет EEPROM, нет FFat — только неопиксель-маячок и USBFlash.
 
 #include "config.h"
 #include "version.h"
-#include "boot_control.h"
-#include "serial_console.h"
-#include "storage_control.h"
-
-// ============================================================================
-// === SETUP ===
-// ============================================================================
+#include "usb_flash.h"
 
 void setup() {
-    // Задержка для стабилизации USB CDC после перезагрузки
+    // Маячок: синий — жив, жёлтый — MSC поднят.
+    rgbLedWrite(NEOPIXEL_PIN, 0, 0, 40);
     delay(500);
+    rgbLedWrite(NEOPIXEL_PIN, 0, 0, 0);
 
-    // Снимаем GPIO hold, если перед перезагрузкой был выставлен fallback-путь в UF2
-    BootControl::init();
+    // Даём USB-OTG окончательно "отойти" после TinyUF2.
+    delay(1500);
 
-    Serial.begin(921600);
-    delay(100);
-
-    Serial.printf("\n[BOOT] Firmware %s\n", FIRMWARE_VERSION);
-    BootControl::logPartitionInfo();
-
-    // NVS (через EEPROM-обёртку)
-    if (!EEPROM.begin(512)) {
-        Serial.println("[BOOT] EEPROM FAILED");
+    if (USBFlash::mount()) {
+        rgbLedWrite(NEOPIXEL_PIN, 40, 25, 0);  // жёлтый = MSC готов
+    } else {
+        rgbLedWrite(NEOPIXEL_PIN, 40, 0, 0);   // красный = ошибка
     }
-
-    // Монтируем FAT-раздел для хранения данных
-    StorageControl::begin();
-
-    Serial.println("[BOOT] Ready.");
-#if SERIAL_CONSOLE
-    Serial.println("[BOOT] Serial console active. Commands: UF2  RESET  INFO  LS  DF");
-#endif
 }
 
-// ============================================================================
-// === LOOP ===
-// ============================================================================
-
 void loop() {
-#if SERIAL_CONSOLE
-    SerialConsole::update();
-#endif
 }

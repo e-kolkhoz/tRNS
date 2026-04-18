@@ -33,9 +33,11 @@ fi
 mkdir -p "$SCRIPT_DIR/build"
 
 # ESP32-S3FH4R2 — Lolin S3 Mini (тот же чип, та же разметка флеша)
-# CDCOnBoot=cdc  — Serial → USB CDC (нет UART-моста на плате)
-# Для перехода на Waveshare Zero: тот же FQBN, только tinyuf2/ бинари другие
-FQBN="esp32:esp32:lolin_s3_mini:CDCOnBoot=cdc"
+# USBMode=default  → TinyUSB доступен (нужен для MSC).
+# CDCOnBoot=default → USB НЕ поднимается автоматом в initArduino();
+#   делаем USB.begin() руками в setup() после задержки —
+#   это даёт OTG-контроллеру время "отойти" после TinyUF2.
+FQBN="esp32:esp32:lolin_s3_mini:USBMode=default,CDCOnBoot=default"
 
 # Размер ota_0 из partitions.csv: 0x2c0000 = 2883584 байт
 OTA0_SIZE=2883584

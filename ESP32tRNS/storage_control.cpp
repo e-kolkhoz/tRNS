@@ -17,6 +17,13 @@ bool StorageControl::begin() {
     return true;
 }
 
+void StorageControl::end() {
+    if (!_ready) return;
+    FFat.end();
+    _ready = false;
+    Serial.println("[STORAGE] FFat unmounted");
+}
+
 bool StorageControl::isReady() {
     return _ready;
 }

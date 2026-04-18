@@ -3,7 +3,7 @@
 
 // Dev-only serial command processor.
 // Чтобы исключить из прода — закомментируй строку ниже или передай -DSERIAL_CONSOLE=0
-#define SERIAL_CONSOLE 1
+#define SERIAL_CONSOLE 0
 
 #if SERIAL_CONSOLE
 

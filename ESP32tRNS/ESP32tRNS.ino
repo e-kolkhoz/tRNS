@@ -10,16 +10,16 @@
 #include "usb_flash.h"
 
 void setup() {
-    // Маячок: синий — жив, жёлтый — MSC поднят.
-    rgbLedWrite(NEOPIXEL_PIN, 0, 0, 40);
+    // Маячок: синий — красный, жёлтый — MSC поднят.
+    rgbLedWrite(NEOPIXEL_PIN, 40, 0, 0);
     delay(500);
     rgbLedWrite(NEOPIXEL_PIN, 0, 0, 0);
 
     // Даём USB-OTG окончательно "отойти" после TinyUF2.
-    delay(1500);
+    delay(500);
 
     if (USBFlash::mount()) {
-        rgbLedWrite(NEOPIXEL_PIN, 40, 25, 0);  // жёлтый = MSC готов
+        rgbLedWrite(NEOPIXEL_PIN, 0, 0, 40);  // синий = MSC готов
     } else {
         rgbLedWrite(NEOPIXEL_PIN, 40, 0, 0);   // красный = ошибка
     }

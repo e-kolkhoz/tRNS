@@ -1,22 +1,7 @@
 // ============================================================================
-// === tRNS/tACS Device for LOLIN S2 Mini (ESP32-S2) ===
+// === ESP32-S3FH4R2 ===
 // ============================================================================
-// Transcranial Random Noise Stimulation / Transcranial Alternating Current Stimulation
-//
-// Компоненты:
-// - DAC: PCM5102A (I2S, DMA) - генерация tRNS/tACS сигнала
-// - ADC: встроенный ESP32-S2 (DMA) - показометр тока
-// - Потенциометр: ручной (аналоговый)
-// - OLED Display: 128x64 (I2C, SSD1306/SH1106) - отображение метрик
-// - Связь: USB OTG с Android
-//
-// Требуемые библиотеки:
-// - U8g2 (для OLED дисплея): установить через Library Manager в Arduino IDE
-//
-// Архитектура:
-// - Две DMA системы (DAC + ADC) работают параллельно
-// - loop() свободен для USB OTG команд от Android
-// - Кольцевые буферы для непрерывного сбора данных
+
 
 #include <EEPROM.h>
 #include "config.h"
@@ -81,85 +66,7 @@ void setup() {
   
   // Инициализация LUT для калибровки ADC
   Serial.println("[BOOT] initADCCalibration()");
-  initADCCalibration();
-  
-  // ============================================================
-  // === BOOT SEQUENCE с отображением на OLED ===
-  // ============================================================
-  
-  // Шаг 1: Инициализация OLED (первым делом, чтобы показывать прогресс)
-  Serial.println("[BOOT] initDisplay()");
-  initDisplay();
-  
-  // Шаг 2: Выделение памяти под ADC буфер
-  showBootScreen("Allocate ADC...");
-  Serial.println("[BOOT] allocate ADC ring buffer");
-  adc_ring_buffer = (int16_t*)malloc(ADC_RING_SIZE * sizeof(int16_t));
-  if (!adc_ring_buffer) {
-    showBootScreen("ADC alloc FAIL!");
-    while (1) { delay(1000); }
-  }
-  for (uint32_t i = 0; i < ADC_RING_SIZE; i++) {
-    adc_ring_buffer[i] = ADC_INVALID_VALUE;
-  }
-
-  // Шаг 3: Инициализация ADC DMA
-  showBootScreen("Init ADC DMA...");
-  Serial.println("[BOOT] initADC()");
-  Serial.flush();
-  initADC();
-  Serial.println("[BOOT] initADC() OK");
-  Serial.flush();
-  delay(100);  // Даём ADC DMA стабилизироваться
-
-  // Шаг 4: Выделение памяти под DAC сигнал
-  Serial.println("[BOOT] showBootScreen Allocate DAC...");
-  Serial.flush();
-  showBootScreen("Allocate DAC...");
-  Serial.println("[BOOT] allocate signal buffer");
-  signal_buffer = (int16_t*)malloc(SIGNAL_SAMPLES * sizeof(int16_t));
-  if (!signal_buffer) {
-    showBootScreen("DAC alloc FAIL!");
-    while (1) { delay(1000); }
-  }
-
-  // Шаг 5: Загрузка пресета из PROGMEM (обязательно!)
-  Serial.println("[BOOT] loadPresetFromFlash()");
-  bool preset_loaded = loadPresetFromFlash(signal_buffer, current_preset_name, PRESET_NAME_MAX_LEN);
-  if (!preset_loaded) {
-    showBootScreen("ERROR: No preset!");
-    while (1) { delay(1000); }  // Зависаем, без пресета работать нельзя
-  }
-
-  // Шаг 6: Инициализация I2S DAC
-  showBootScreen("Init DAC DMA...");
-  Serial.println("[BOOT] initDAC()");
-  initDAC();
-  
-  // Шаг 7: Инициализация энкодера
-  showBootScreen("Init Encoder...");
-  Serial.println("[BOOT] initEncoder()");
-  initEncoder();
-  
-  // Шаг 8: Инициализация настроек и меню
-  showBootScreen("Init Settings...");
-  Serial.println("[BOOT] initSession()");
-  initSession();
-  showBootScreen("Init Menu...");
-  Serial.println("[BOOT] initMenu()");
-  initMenu();
-  // Гарантируем старт с главного меню
-  stack_depth = 0;
-  screen_stack[0] = SCR_MAIN_MENU;
-
-  // Финальный экран
-  showBootScreen("Starting...");
-  Serial.println("[BOOT] renderCurrentScreen()");
-  delay(500);
-  
-  // Переключаемся на главный экран меню
-  renderCurrentScreen();
-}
+ }
 
 // ============================================================================
 // === LOOP ===

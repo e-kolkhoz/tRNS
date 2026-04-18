@@ -9,5 +9,5 @@ build/
 *.map
 
 # UF2 tools
-uf2conv.py
-uf2families.json
+# uf2conv.py
+# uf2families.json

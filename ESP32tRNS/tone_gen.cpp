@@ -1,4 +1,5 @@
 #include "tone_gen.h"
+#include "config.h"
 #include <Arduino.h>
 #include <math.h>
 #include <atomic>
@@ -64,10 +65,61 @@ void writerTask(void*) {
 
 }  // namespace
 
-bool ToneGen::begin(uint32_t sample_rate) {
-    if (s_tx) return true;
-    s_rate = sample_rate;
+esp_err_t ToneGen::begin(uint32_t sample_rate) {
+    Config c = { sample_rate, I2S_CLK_SRC_DEFAULT, 0, 0, 0 };
+    return begin(c);
+}
 
+int ToneGen::beginTry(const Config* configs, size_t n, TryCb cb) {
+    for (size_t i = 0; i < n; ++i) {
+        esp_err_t err = begin(configs[i]);
+        if (cb) cb((int)i, configs[i], err);
+        if (err == ESP_OK) return (int)i;
+    }
+    return -1;
+}
+
+// Лёгкая проба: только init_pdm_tx_mode, без enable, без writer-task.
+// Не оставляет никаких ресурсов в случае успеха или провала.
+void ToneGen::tryAll(const Config* configs, size_t n, esp_err_t* out_errs) {
+    for (size_t i = 0; i < n; ++i) {
+        const Config& cfg = configs[i];
+
+        i2s_chan_handle_t tx = nullptr;
+        i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
+        chan_cfg.dma_desc_num  = 6;
+        chan_cfg.dma_frame_num = CHUNK_FRAMES;
+        chan_cfg.auto_clear    = true;
+
+        esp_err_t err = i2s_new_channel(&chan_cfg, &tx, nullptr);
+        if (err != ESP_OK) { out_errs[i] = err; continue; }
+
+        i2s_pdm_tx_config_t pdm_cfg = {
+            .clk_cfg  = I2S_PDM_TX_CLK_DAC_DEFAULT_CONFIG(cfg.sample_rate),
+            .slot_cfg = I2S_PDM_TX_SLOT_DAC_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT,
+                                                           I2S_SLOT_MODE_STEREO),
+            .gpio_cfg = {
+                .clk          = I2S_GPIO_UNUSED,
+                .dout         = (gpio_num_t)TONE_DOUT1_PIN,
+                .dout2        = (gpio_num_t)TONE_DOUT2_PIN,
+                .invert_flags = { .clk_inv = 0 },
+            },
+        };
+        if (cfg.clk_src)      pdm_cfg.clk_cfg.clk_src      = cfg.clk_src;
+        if (cfg.up_sample_fp) pdm_cfg.clk_cfg.up_sample_fp = cfg.up_sample_fp;
+        if (cfg.up_sample_fs) pdm_cfg.clk_cfg.up_sample_fs = cfg.up_sample_fs;
+        if (cfg.bclk_div)     pdm_cfg.clk_cfg.bclk_div     = cfg.bclk_div;
+
+        err = i2s_channel_init_pdm_tx_mode(tx, &pdm_cfg);
+        out_errs[i] = err;
+        i2s_del_channel(tx);
+    }
+}
+
+esp_err_t ToneGen::begin(const Config& cfg) {
+    if (s_tx) return ESP_OK;
+
+    s_rate = cfg.sample_rate;
     for (int i = 0; i < CHANNELS; ++i) {
         s_ch[i].loop.store(&s_silence);
         s_ch[i].pos = 0;
@@ -79,33 +131,38 @@ bool ToneGen::begin(uint32_t sample_rate) {
     chan_cfg.dma_frame_num = CHUNK_FRAMES;
     chan_cfg.auto_clear    = true;
 
-    if (i2s_new_channel(&chan_cfg, &s_tx, nullptr) != ESP_OK) {
-        s_tx = nullptr;
-        return false;
-    }
+    esp_err_t err = i2s_new_channel(&chan_cfg, &s_tx, nullptr);
+    if (err != ESP_OK) { s_tx = nullptr; return err; }
 
     i2s_pdm_tx_config_t pdm_cfg = {
-        .clk_cfg  = I2S_PDM_TX_CLK_DAC_DEFAULT_CONFIG(sample_rate),
+        .clk_cfg  = I2S_PDM_TX_CLK_DAC_DEFAULT_CONFIG(cfg.sample_rate),
         .slot_cfg = I2S_PDM_TX_SLOT_DAC_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT,
                                                        I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
             .clk          = I2S_GPIO_UNUSED,
-            .dout         = GPIO_NUM_1,
-            .dout2        = GPIO_NUM_2,
+            .dout         = (gpio_num_t)TONE_DOUT1_PIN,
+            .dout2        = (gpio_num_t)TONE_DOUT2_PIN,
             .invert_flags = { .clk_inv = 0 },
         },
     };
 
-    if (i2s_channel_init_pdm_tx_mode(s_tx, &pdm_cfg) != ESP_OK) {
+    if (cfg.clk_src)      pdm_cfg.clk_cfg.clk_src      = cfg.clk_src;
+    if (cfg.up_sample_fp) pdm_cfg.clk_cfg.up_sample_fp = cfg.up_sample_fp;
+    if (cfg.up_sample_fs) pdm_cfg.clk_cfg.up_sample_fs = cfg.up_sample_fs;
+    if (cfg.bclk_div)     pdm_cfg.clk_cfg.bclk_div     = cfg.bclk_div;
+
+    err = i2s_channel_init_pdm_tx_mode(s_tx, &pdm_cfg);
+    if (err != ESP_OK) {
         i2s_del_channel(s_tx);
         s_tx = nullptr;
-        return false;
+        return err;
     }
 
-    if (i2s_channel_enable(s_tx) != ESP_OK) {
+    err = i2s_channel_enable(s_tx);
+    if (err != ESP_OK) {
         i2s_del_channel(s_tx);
         s_tx = nullptr;
-        return false;
+        return err;
     }
 
     BaseType_t r = xTaskCreatePinnedToCore(writerTask, "tonegen",
@@ -114,10 +171,10 @@ bool ToneGen::begin(uint32_t sample_rate) {
         i2s_channel_disable(s_tx);
         i2s_del_channel(s_tx);
         s_tx = nullptr;
-        return false;
+        return ESP_ERR_NO_MEM;
     }
 
-    return true;
+    return ESP_OK;
 }
 
 bool ToneGen::setSineLoop(int ch, float freq_hz, int32_t gain_q15) {

@@ -43,8 +43,9 @@ FQBN="esp32:esp32:lolin_s3_mini:USBMode=default,CDCOnBoot=default"
 OTA0_SIZE=2883584
 
 echo "FQBN: $FQBN"
-echo "Compiling..."
+echo "Compiling (clean)..."
 arduino-cli compile \
+  --clean \
   --fqbn "$FQBN" \
   --build-property "upload.maximum_size=${OTA0_SIZE}" \
   --output-dir "$SCRIPT_DIR/build" \

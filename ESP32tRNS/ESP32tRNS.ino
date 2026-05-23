@@ -17,6 +17,7 @@
 #include "version.h"
 #include "custom_presets.h"
 #include "usb_flash.h"
+#include "dac_control.h"
 
 #include <Wire.h>
 #include <U8g2lib.h>
@@ -38,10 +39,11 @@ static EncButton enc(ENC_A, ENC_B, ENC_S);
 // ============================================================
 // === МЕНЮ ===
 // ============================================================
-// Пункты: 0-wavs  1-usb  2-charging  3-bat_V  4-go_sleep  5-uf2
-static const int8_t MENU_N        = 6;
-static const int8_t MENU_GO_SLEEP = 4;
-static const int8_t MENU_UF2      = 5;
+// Пункты: 0-wavs  1-usb  2-charging  3-bat_V  4-play_sin640  5-go_sleep  6-uf2
+static const int8_t MENU_N          = 7;
+static const int8_t MENU_PLAY_SIN   = 4;
+static const int8_t MENU_GO_SLEEP   = 5;
+static const int8_t MENU_UF2        = 6;
 
 static int8_t menu_idx = 0;
 
@@ -61,7 +63,16 @@ static void go_sleep() {
   while (digitalRead(ENC_S) == LOW) { delay(10); }
   delay(200);  // дебаунс отпускания
 
-  // RTC pull-up: обычный INPUT_PULLUP отключается во сне → пин плавал в LOW
+  // CHRG: во сне ESP не подтягивает линию — на DMM виден только TP4054 / подтяжка на модуле
+  rtc_gpio_init((gpio_num_t)CHRG_PIN);
+  rtc_gpio_set_direction((gpio_num_t)CHRG_PIN, RTC_GPIO_MODE_INPUT_ONLY);
+  rtc_gpio_pullup_dis((gpio_num_t)CHRG_PIN);
+  rtc_gpio_pulldown_dis((gpio_num_t)CHRG_PIN);
+  rtc_gpio_isolate((gpio_num_t)CHRG_PIN);
+
+  // ENC_S: RTC pull-up + ext1 wakeup (обычный INPUT_PULLUP во сне отваливается)
+  rtc_gpio_init((gpio_num_t)ENC_S);
+  rtc_gpio_set_direction((gpio_num_t)ENC_S, RTC_GPIO_MODE_INPUT_ONLY);
   rtc_gpio_pullup_en((gpio_num_t)ENC_S);
   rtc_gpio_pulldown_dis((gpio_num_t)ENC_S);
   // ESP32-S3: ext1 (ANY_LOW = любой из пинов маски пошёл в LOW)
@@ -80,10 +91,12 @@ static void draw_menu() {
   char lines[MENU_N][22];
   snprintf(lines[0], sizeof(lines[0]), "wavs: %u",     (unsigned)g_presets.size());
   snprintf(lines[1], sizeof(lines[1]), "usb: %s",      digitalRead(USB_DET)   ? "on" : "off");
-  snprintf(lines[2], sizeof(lines[2]), "charging: %s", digitalRead(VBUS_STAT) ? "on" : "off");
+  // CHRG: open drain, при INPUT_PULLUP LOW = активная зарядка (линия тянет вниз)
+  snprintf(lines[2], sizeof(lines[2]), "chg: %s", digitalRead(CHRG_PIN) == LOW ? "on" : "off");
   snprintf(lines[3], sizeof(lines[3]), "bat_V: %.2f",  read_bat_v());
-  snprintf(lines[4], sizeof(lines[4]), "go_sleep");
-  snprintf(lines[5], sizeof(lines[5]), "uf2");
+  snprintf(lines[4], sizeof(lines[4]), "play_sin640: %s", DacControl::isPlaying() ? "on" : "off");
+  snprintf(lines[5], sizeof(lines[5]), "go_sleep");
+  snprintf(lines[6], sizeof(lines[6]), "uf2");
 
   // Смещение прокрутки
   int8_t scroll = 0;
@@ -167,8 +180,12 @@ void setup() {
   pinMode(EN_WAKEUP, OUTPUT);
   digitalWrite(EN_WAKEUP, HIGH);
 
-  pinMode(USB_DET,   INPUT);
-  pinMode(VBUS_STAT, INPUT_PULLDOWN);
+  pinMode(USB_DET, INPUT);
+  pinMode(CHRG_PIN, INPUT_PULLUP);
+  analogSetAttenuation(ADC_11db);
+
+  DacControl::init();
+  DacControl::start();
 
   rgbLedWrite(NEOPIXEL_PIN, 0, 0, 40);
   delay(300);
@@ -212,7 +229,13 @@ void loop() {
     rgbLedWrite(NEOPIXEL_PIN, 0, 30, 35);
   }
   if (enc.click()) {
-    if (menu_idx == MENU_GO_SLEEP) {
+    if (menu_idx == MENU_PLAY_SIN) {
+      if (DacControl::isPlaying()) {
+        DacControl::stop();
+      } else {
+        DacControl::start();
+      }
+    } else if (menu_idx == MENU_GO_SLEEP) {
       go_sleep();       // уходим в спячку, пробуждение по ENC_S
     } else if (menu_idx == MENU_UF2) {
       BootControl::rebootToUF2();   // перезагрузка в UF2 bootloader

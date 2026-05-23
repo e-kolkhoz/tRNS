@@ -21,7 +21,7 @@
 
 // BATTERY AND POWER
 #define PLUS_BAT_ADC  6   // аналоговый вход с делителя 360k/100k батарейки 3.7V 
-#define VBUS_STAT     7   // вход детектор VBUS c USB c делителя 51k/100k относительно входа CHRG TP4054S5
+#define CHRG_PIN      7   // TP4054 CHRG (open drain): к GND пока идёт заряд; hi-Z когда нет. К ESP через R или напрямую; INPUT_PULLUP
 #define EN_WAKEUP     17  // выход вкл. аналоговые модули
 #define USB_DET       21  // вход детектор VBUS c USB c делителя 51k/100k
 

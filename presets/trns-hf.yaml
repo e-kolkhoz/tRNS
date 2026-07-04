@@ -1,0 +1,46 @@
+# Высокочастотный tRNS 100-640 на базе WAV
+# Гауссовский шум, квазибелый в дипапазоне 100-640 Гц симметричный униполярный
+dsl_version: 1
+name: "tRNS-hf"
+type: "WAV"
+
+channels:
+  mode: "left"
+
+feedback:
+  # Итоговая оценка амплитуды: base_value * amp_estimation_coeff
+  amp_estimation_base: "STD"
+  # Для гауссовского шума используем 3σ-оценку
+  amp_estimation_coeff: 3.0
+
+scope:
+  # Для WAV обычно один период лупа
+  sync_mode: "one_period"
+
+# WAV должен лежать рядом на флешке
+wave_file: "trns-hf.wav"
+
+params:
+  # menu_label: "Амплитуда, мА"
+  # screen_label: "Ампл., мА"
+  amplitude_mA:
+    min: 0.1
+    max: 2.0
+    step: 0.1
+    default: 1.0
+
+  # menu_label: "Плавный старт, с"
+  # screen_label: "Старт, с"
+  fade_in_sec:
+    min: 0
+    max: 60
+    step: 1
+    default: 10
+
+  # menu_label: "Плавный стоп, с"
+  # screen_label: "Стоп, с"
+  fade_out_sec:
+    min: 0
+    max: 60
+    step: 1
+    default: 10

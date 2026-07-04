@@ -1,0 +1,38 @@
+{
+    "configurations": [
+        {
+            "name": "ESP32-S3 Arduino",
+            "compilerPath": "/home/sk/.arduino15/packages/esp32/tools/esp-x32/2511/bin/xtensa-esp32s3-elf-gcc",
+            "compilerArgs": [
+                "-mlongcalls"
+            ],
+            "intelliSenseMode": "gcc-arm",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "includePath": [
+                "${workspaceFolder}/ESP32tRNS",
+                "${workspaceFolder}/ESP32tRNS/**",
+                "/home/sk/.arduino15/packages/esp32/hardware/esp32/3.3.6/cores/esp32",
+                "/home/sk/.arduino15/packages/esp32/hardware/esp32/3.3.6/libraries/**",
+                "/home/sk/.arduino15/packages/esp32/tools/esp32s3-libs/3.3.6/include/**",
+                "/home/sk/Arduino/libraries/**"
+            ],
+            "defines": [
+                "ARDUINO=10819",
+                "ARDUINO_ESP32S3_DEV",
+                "ARDUINO_ARCH_ESP32",
+                "ESP32",
+                "CORE_DEBUG_LEVEL=0"
+            ],
+            "browse": {
+                "path": [
+                    "${workspaceFolder}/ESP32tRNS",
+                    "/home/sk/.arduino15/packages/esp32/hardware/esp32/3.3.6",
+                    "/home/sk/Arduino/libraries"
+                ],
+                "limitSymbolsToIncludedHeaders": false
+            }
+        }
+    ],
+    "version": 4
+}

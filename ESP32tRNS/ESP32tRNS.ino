@@ -18,6 +18,7 @@
 #include "custom_presets.h"
 #include "usb_flash.h"
 #include "dac_control.h"
+#include "adc_control.h"
 
 #include <Wire.h>
 #include <U8g2lib.h>
@@ -52,6 +53,43 @@ static int8_t menu_idx = 0;
 // V_adc = raw * 3.3 / 4095
 static float read_bat_v() {
   return analogRead(PLUS_BAT_ADC) * (3.3f / 4095.0f) * (460.0f / 360.0f);
+}
+
+static void format_adc_stats(char* buf, size_t len, char tag, const AdcChannelStats& st) {
+  if (!st.valid) {
+    snprintf(buf, len, "%c:----", tag);
+  } else {
+    snprintf(buf, len, "%c:%.2f>%.2f<%.2f|%.4f",
+             tag, st.min_v, st.mean_v, st.max_v, st.std_v);
+  }
+}
+
+// --- Экран play_sin640: метрики ADC на OLED ---
+static void draw_play_screen() {
+  oled.clearBuffer();
+  oled.setFont(u8g2_font_6x12_tf);
+  oled.drawStr(0, 0, "== sin640 ==");
+
+  AdcHwStatus hw = AdcControl::hwStatus();
+  if (!hw.l_pin_ok || !hw.r_pin_ok) {
+    char err[28];
+    snprintf(err, sizeof(err), "ADC: GPIO%d/%d", ADC_SENSE1, ADC_SENSE2);
+    oled.drawStr(0, 14, err);
+  } else if (!hw.configured) {
+    oled.drawStr(0, 14, "ADC: cfg fail");
+  } else if (!AdcControl::isRunning()) {
+    oled.drawStr(0, 14, "ADC: stopped");
+  } else {
+    oled.setFont(u8g2_font_5x7_tf);
+    char lbuf[28], rbuf[28];
+    format_adc_stats(lbuf, sizeof(lbuf), 'L', AdcControl::statsLeft());
+    format_adc_stats(rbuf, sizeof(rbuf), 'R', AdcControl::statsRight());
+    oled.drawStr(0, 22, lbuf);
+    oled.drawStr(0, 34, rbuf);
+    oled.drawStr(0, 52, "click=stop");
+  }
+
+  oled.sendBuffer();
 }
 
 // --- Глубокий сон, пробуждение по нажатию ENC_S ---
@@ -115,6 +153,7 @@ static void draw_menu() {
 
   // Пункты
   int8_t vis = (MENU_N < MAX_VIS) ? MENU_N : MAX_VIS;
+
   for (int8_t i = 0; i < vis; i++) {
     int8_t idx = scroll + i;
     int8_t y   = Y_START + i * ITEM_H;
@@ -153,6 +192,7 @@ void IRAM_ATTR enc_isr() {
 static void init_enc_oled() {
   Wire.begin(OLED_SDA, OLED_SCL);
   Wire.setClock(OLED_I2C_HZ);
+  AdcControl::init();
   oled.setI2CAddress(DISPLAY_ADDR << 1);
   oled.begin();
   oled.enableUTF8Print();
@@ -161,19 +201,20 @@ static void init_enc_oled() {
   oled.setPowerSave(0);
 
   enc.setEncType(EB_STEP4_LOW);
-  enc.setDebTimeout(30);
+  enc.setDebTimeout(120); // 120ms debounce — защита от дребезга механического энкодера
+  enc.setEncReverse(true);
   pinMode(ENC_A, INPUT_PULLUP);
   pinMode(ENC_B, INPUT_PULLUP);
   pinMode(ENC_S, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(ENC_A), enc_isr, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENC_B), enc_isr, CHANGE);
+  enc.setEncReverse(true);
 
   draw_menu();
 }
 
 // ============================================================
 void setup() {
-  Serial.begin(115200);
   BootControl::init();   // снять GPIO hold если остался с прошлой сессии UF2
 
   // Аналоговые модули включаем сразу после старта
@@ -185,7 +226,6 @@ void setup() {
   analogSetAttenuation(ADC_11db);
 
   DacControl::init();
-  DacControl::start();
 
   rgbLedWrite(NEOPIXEL_PIN, 0, 0, 40);
   delay(300);
@@ -207,6 +247,7 @@ void setup() {
   }
 
   init_enc_oled();
+  
 }
 
 void loop() {
@@ -232,8 +273,10 @@ void loop() {
     if (menu_idx == MENU_PLAY_SIN) {
       if (DacControl::isPlaying()) {
         DacControl::stop();
+        AdcControl::stop();
       } else {
         DacControl::start();
+        AdcControl::start();
       }
     } else if (menu_idx == MENU_GO_SLEEP) {
       go_sleep();       // уходим в спячку, пробуждение по ENC_S
@@ -244,11 +287,15 @@ void loop() {
     rgbLedWrite(NEOPIXEL_PIN, 40, 40, 15);
   }
 
-  // Перерисовываем при изменении или раз в 500 мс (обновление bat_V)
+  // Перерисовка: меню или экран метрик play_sin640
   static uint32_t t_draw;
-  if (ch || millis() - t_draw > 500) {
+  if (ch || millis() - t_draw > 200) {
     t_draw = millis();
-    draw_menu();
+    if (DacControl::isPlaying()) {
+      draw_play_screen();
+    } else {
+      draw_menu();
+    }
   }
 
   static uint32_t neo_idle;

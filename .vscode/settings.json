@@ -1,3 +1,9 @@
 {
-    "idf.pythonInstallPath": "/home/sk/.pyenv/shims/python"
+    "idf.pythonInstallPath": "/home/sk/.pyenv/shims/python",
+
+    "files.associations": {
+        "*.ino": "cpp"
+    },
+    "C_Cpp.errorSquiggles": "enabled",
+    "C_Cpp.default.configurationProvider": "ms-vscode.cpptools"
 }

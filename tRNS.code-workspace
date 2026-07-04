@@ -1,0 +1,15 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../../../../dev_tRNS"
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"*.ino": "cpp"
+		}
+	}
+}

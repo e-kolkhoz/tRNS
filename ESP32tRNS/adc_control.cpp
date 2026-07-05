@@ -84,6 +84,26 @@ static AdcChannelStats computeStats(const float* ring) {
     return out;
 }
 
+static bool scopeTraceImpl(const float* ring, float* out, uint8_t width,
+                           uint32_t window_samples, uint32_t start_offset) {
+    uint32_t count = s_wr_idx;
+    if (count > ADC_RING_SIZE) count = ADC_RING_SIZE;
+    if (count < (uint32_t)(ADC_OUT_RATE_HZ / 10)) return false;  // < 100 мс данных
+
+    if (window_samples == 0 || window_samples > count) window_samples = count;
+    uint32_t decim = window_samples / width;
+    if (decim < 1) decim = 1;
+    uint32_t span = decim * width;
+    if (span > count) span = count;
+
+    uint32_t start = (s_wr_idx + ADC_RING_SIZE - span - start_offset) % ADC_RING_SIZE;
+    for (uint8_t x = 0; x < width; x++) {
+        uint32_t idx = (start + (uint32_t)x * decim) % ADC_RING_SIZE;
+        out[x] = ring[idx];
+    }
+    return true;
+}
+
 static bool setupAdcPattern(adc_digi_pattern_config_t* pat, int gpio, adc_channel_t* out_ch) {
     adc_unit_t unit;
     if (adc_continuous_io_to_channel(gpio, &unit, out_ch) != ESP_OK) {
@@ -151,10 +171,6 @@ bool AdcControl::s_pin_l_ok   = false;
 bool AdcControl::s_pin_r_ok   = false;
 bool AdcControl::s_configured = false;
 
-AdcHwStatus AdcControl::hwStatus() {
-    return { s_pin_l_ok, s_pin_r_ok, s_configured };
-}
-
 void AdcControl::init() {
     if (s_adc) return;
 
@@ -193,8 +209,8 @@ void AdcControl::start() {
     s_dec_l = {};
     s_dec_r = {};
     for (uint32_t i = 0; i < ADC_RING_SIZE; ++i) {
-        s_ring_l[i] = ADC_OFFSET_V;
-        s_ring_r[i] = ADC_OFFSET_V;
+        s_ring_l[i] = DEF_ADC_OFFSET_L_V;
+        s_ring_r[i] = DEF_ADC_OFFSET_R_V;
     }
 
     if (adc_continuous_start(s_adc) != ESP_OK) {
@@ -220,3 +236,8 @@ void AdcControl::stop() {
 
 AdcChannelStats AdcControl::statsLeft()  { return computeStats(s_ring_l); }
 AdcChannelStats AdcControl::statsRight() { return computeStats(s_ring_r); }
+
+bool AdcControl::scopeTrace(bool left, float* out, uint8_t width,
+                            uint32_t window_samples, uint32_t start_offset) {
+    return scopeTraceImpl(left ? s_ring_l : s_ring_r, out, width, window_samples, start_offset);
+}

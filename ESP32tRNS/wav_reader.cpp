@@ -55,7 +55,7 @@ bool parseHeader(File& f, WavInfo& info, uint32_t& dataSize, uint32_t expectedRa
 
     if (!haveFmt || !haveData)                      return false;
     if (audioFormat != 1)                           return false;  // PCM
-    if (channels != 1)                              return false;  // mono
+    if (!(channels == 1 || channels == 2))         return false;  // mono/stereo
     if (bitsPerSample != 16)                        return false;
     if (expectedRate && sampleRate != expectedRate) return false;
 
@@ -63,44 +63,51 @@ bool parseHeader(File& f, WavInfo& info, uint32_t& dataSize, uint32_t expectedRa
     info.channels      = channels;
     info.bitsPerSample = bitsPerSample;
     info.totalSamples  = dataSize / 2;
+    info.totalFrames   = (channels > 0) ? (info.totalSamples / channels) : 0;
     return true;
 }
 
 }  // namespace
 
-bool WavReader::read(const char* path,
-                     int16_t* samples,
-                     size_t maxSamples,
-                     size_t* outCount,
-                     WavInfo* info,
-                     uint32_t expectedRate) {
-    if (outCount) *outCount = 0;
+bool WavReader::readFrames(const char* path,
+                           int16_t* left,
+                           int16_t* right,
+                           size_t maxFrames,
+                           size_t* outFrames,
+                           WavInfo* info,
+                           uint32_t expectedRate) {
+    if (outFrames) *outFrames = 0;
+    if (!left || !right || maxFrames == 0) return false;
 
     File f = FFat.open(path, "r");
     if (!f) return false;
 
-    WavInfo  tmp = {};
+    WavInfo tmp = {};
     uint32_t dataSize = 0;
     if (!parseHeader(f, tmp, dataSize, expectedRate)) { f.close(); return false; }
 
-    size_t toRead = (tmp.totalSamples < maxSamples) ? tmp.totalSamples : maxSamples;
-    size_t got    = f.read((uint8_t*)samples, toRead * 2) / 2;
+    size_t frames = (tmp.totalFrames < maxFrames) ? tmp.totalFrames : maxFrames;
+    size_t got = 0;
+    if (tmp.channels == 1) {
+        for (size_t i = 0; i < frames; i++) {
+            int16_t s = 0;
+            if (f.read((uint8_t*)&s, sizeof(s)) != (int)sizeof(s)) break;
+            left[i] = s;
+            right[i] = s;
+            got++;
+        }
+    } else {
+        for (size_t i = 0; i < frames; i++) {
+            int16_t lr[2];
+            if (f.read((uint8_t*)lr, sizeof(lr)) != (int)sizeof(lr)) break;
+            left[i] = lr[0];
+            right[i] = lr[1];
+            got++;
+        }
+    }
     f.close();
 
     if (info) *info = tmp;
-    if (outCount) *outCount = got;
+    if (outFrames) *outFrames = got;
     return got > 0;
-}
-
-bool WavReader::probe(const char* path, WavInfo* info, uint32_t expectedRate) {
-    File f = FFat.open(path, "r");
-    if (!f) return false;
-
-    WavInfo  tmp = {};
-    uint32_t dataSize = 0;
-    bool ok = parseHeader(f, tmp, dataSize, expectedRate);
-    f.close();
-
-    if (ok && info) *info = tmp;
-    return ok;
 }

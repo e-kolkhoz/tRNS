@@ -30,13 +30,15 @@
 #define OLED_I2C_HZ    100000
 #define DISPLAY_ADDR   0x3C 
 
-// ADC токовая ОС: униполяр + сдвиг ~1.25V (ИОН)
+// ADC токовая ОС: униполяр + сдвиг (ИОН), стартовые дефолты под atten=11dB
 // Только ADC1 GPIO1-10! GPIO11+ = ADC2, continuous на S3 не работает.
 #define ADC_SENSE1  4    // LEFT  ADC1_CH3
 #define ADC_SENSE2  5    // RIGHT ADC1_CH4
 #define ADC_MOD_ATTEN           ADC_ATTEN_DB_12
 #define ADC_MAX_VOLTAGE         3.3f
-#define ADC_OFFSET_V            1.25f
+#define DEF_ADC_OFFSET_L_V      1.18f   // V offset для левого канала
+#define DEF_ADC_OFFSET_R_V      1.18f   // V offset для правого канала
+#define DEF_ADC_V_TO_MA         0.37f   // коэффициент пересчета V -> mA
 
 #define ADC_RAW_RATE_HZ         32000
 #define ADC_OUT_RATE_HZ         8000

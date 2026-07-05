@@ -62,9 +62,16 @@ some_param:
 
 Состав `params` зависит от `type`:
 
-- `CONST`: обычно `amplitude_mA`, `fade_in_sec`, `fade_out_sec`.
-- `SIN`: обычно `amplitude_mA`, `frequency_hz`, `fade_in_sec`, `fade_out_sec`.
-- `WAV`: обычно `amplitude_mA`, `fade_in_sec`, `fade_out_sec`.
+- `CONST`: `amplitude_mA`, `fade_in_sec`, `fade_out_sec`, `duration_min`.
+- `SIN`: `amplitude_mA`, `frequency_hz`, `fade_in_sec`, `fade_out_sec`, `duration_min`.
+- `WAV`: `amplitude_mA`, `fade_in_sec`, `fade_out_sec`, `duration_min`.
+
+Единое правило для `duration_min` (во всех пресетах):
+
+- `min: 2`
+- `max: 60`
+- `step: 1`
+- `default: 20`
 
 ## 6) Как считается амплитуда в `feedback`
 
@@ -95,6 +102,7 @@ feedback:
 
 - общий набор (см. выше);
 - `sample_rate_hz.value` (фиксированная частота дискретизации параметрического генератора).
+- в `params` обязательно `duration_min`.
 - для `feedback` рекомендуется:
   - `amp_estimation_base: MEAN`
   - `amp_estimation_coeff: 1.0`
@@ -110,7 +118,7 @@ feedback:
 
 - общий набор;
 - `sample_rate_hz.value`;
-- в `params` обязательно `frequency_hz`.
+- в `params` обязательно `frequency_hz` и `duration_min`.
 - для `feedback` рекомендуется:
   - `amp_estimation_base: STD`
   - `amp_estimation_coeff: 1.414`
@@ -129,6 +137,7 @@ feedback:
 
 - общий набор;
 - `wave_file` (имя WAV-файла на флешке).
+- в `params` обязательно `duration_min`.
 - для `feedback` рекомендуется:
   - `amp_estimation_base: STD`
   - `amp_estimation_coeff: 3.0`
@@ -140,6 +149,15 @@ feedback:
 Не используется:
 
 - `sample_rate_hz` (частота берется из WAV/пайплайна воспроизведения).
+
+Канальный маппинг WAV:
+
+- `mono + left`: сигнал только в левый канал.
+- `mono + both`: один и тот же сигнал копируется в L/R.
+- `stereo + left`: используется только левый канал WAV.
+- `stereo + both`: используется L/R как в WAV.
+
+Нормализация амплитуды WAV выполняется поканально (независимо для L и R).
 
 ## 8) Терминология fade/ramp
 

@@ -38,5 +38,13 @@ params:
     step: 1
     default: 10
 
+  # menu_label: "Длительность, мин"
+  # screen_label: "Длит., мин"
+  duration_min:
+    min: 2
+    max: 60
+    step: 1
+    default: 20
+
 sample_rate_hz: # частота дискретизации
   value: 8000

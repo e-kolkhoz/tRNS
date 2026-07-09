@@ -134,7 +134,7 @@ static DacProgram g_program = {
     DEFAULT_SIN_HZ,
     DAC_SAMPLE_RATE
 };
-static volatile float g_gain = 1.0f;
+static volatile float g_gain = 0.0f;
 
 static void rebuildWave(DacProgram& program) {
     if (program.waveform == DacWaveform::CONST_DC) {
@@ -200,7 +200,10 @@ void DacControl::playerTask(void* arg) {
 }
 
 void DacControl::init() {
-    rebuildWave(g_program);
+    g_gain = 0.0f;
+    g_wave_len = 1;
+    g_wave[0] = 0;
+    g_wave[1] = 0;
 
     i2s_config_t i2s_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
@@ -274,8 +277,8 @@ void DacControl::setCodeToMa(float codes_per_ma_l, float codes_per_ma_r) {
 
 void DacControl::start() {
     if (s_playing) return;
+    digitalWrite(EN_WAKEUP, HIGH);  // питание аналога только при активном сеансе
     s_playing = true;
-    digitalWrite(EN_WAKEUP, HIGH);
 
     xTaskCreatePinnedToCore(playerTask, "dac_sin", 3072, NULL, 6, &s_task, 1);
 }

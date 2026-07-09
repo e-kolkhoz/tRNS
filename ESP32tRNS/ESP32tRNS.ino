@@ -1162,9 +1162,10 @@ static void init_enc_oled() {
 void setup() {
   BootControl::init();   // снять GPIO hold если остался с прошлой сессии UF2
 
-  // Аналоговые модули включаем сразу после старта
+  // Аналоговая часть ВЫКЛ до явного старта сеанса (POWER_CONTROL.md).
+  // HIGH подаётся только в DacControl::start(), LOW — в stop() и go_sleep().
   pinMode(EN_WAKEUP, OUTPUT);
-  digitalWrite(EN_WAKEUP, HIGH);
+  digitalWrite(EN_WAKEUP, LOW);
 
   pinMode(USB_DET, INPUT);
   pinMode(CHRG_PIN, INPUT_PULLUP);

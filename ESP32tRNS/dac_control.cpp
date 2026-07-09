@@ -5,6 +5,7 @@
 #include "freertos/task.h"
 #include <Arduino.h>
 #include <cmath>
+#include <cstring>
 
 namespace {
 
@@ -124,16 +125,19 @@ static bool fill_custom_stereo(const int16_t* left, const int16_t* right, size_t
     return true;
 }
 
-static DacProgram g_program = {
-    DacWaveform::SIN,
-    DEFAULT_AMP_MA,
-    DEFAULT_AMP_MA,
-    DEFAULT_SIN_HZ,
-    DEFAULT_SIN_HZ,
-    DEFAULT_SIN_HZ,
-    DEFAULT_SIN_HZ,
-    DAC_SAMPLE_RATE
+static const DacProgram kIdleProgram = {
+    .waveform           = DacWaveform::CONST_DC,
+    .amp_l_ma           = 0.0f,
+    .amp_r_ma           = 0.0f,
+    .target_freq_hz     = 0.0f,
+    .target_freq_r_hz   = 0.0f,
+    .actual_freq_hz     = 0.0f,
+    .actual_freq_r_hz   = 0.0f,
+    .period_samples_l   = 0,
+    .period_samples_r   = 0,
+    .sample_rate_hz     = DAC_SAMPLE_RATE,
 };
+static DacProgram g_program = kIdleProgram;
 static volatile float g_gain = 0.0f;
 
 static void rebuildWave(DacProgram& program) {
@@ -160,6 +164,74 @@ static void rebuildWave(DacProgram& program) {
 bool DacControl::s_playing = false;
 i2s_port_t DacControl::s_i2s_port = I2S_NUM_0;
 TaskHandle_t DacControl::s_task = nullptr;
+
+namespace {
+
+static bool s_driver_installed = false;
+static constexpr i2s_port_t kI2sPort = I2S_NUM_0;
+
+static void parkI2sPins() {
+    pinMode(I2S_BCLK, OUTPUT);
+    pinMode(I2S_WCLK, OUTPUT);
+    pinMode(I2S_DOUT, OUTPUT);
+    digitalWrite(I2S_BCLK, LOW);
+    digitalWrite(I2S_WCLK, LOW);
+    digitalWrite(I2S_DOUT, LOW);
+}
+
+static void releaseDriver() {
+    if (s_driver_installed) {
+        i2s_stop(kI2sPort);
+        i2s_zero_dma_buffer(kI2sPort);
+        i2s_driver_uninstall(kI2sPort);
+        s_driver_installed = false;
+    }
+    parkI2sPins();
+}
+
+static bool ensureDriver() {
+    if (s_driver_installed) return true;
+
+    i2s_config_t i2s_config = {
+        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
+        .sample_rate = DAC_SAMPLE_RATE,
+        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
+        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+        .dma_buf_count = 4,
+        .dma_buf_len = 256,
+        .use_apll = false,
+        .tx_desc_auto_clear = true,
+        .fixed_mclk = 0
+    };
+    if (i2s_driver_install(kI2sPort, &i2s_config, 0, NULL) != ESP_OK) {
+        return false;
+    }
+
+    i2s_pin_config_t pin_config = {
+        .bck_io_num   = I2S_BCLK,
+        .ws_io_num    = I2S_WCLK,
+        .data_out_num = I2S_DOUT,
+        .data_in_num  = I2S_PIN_NO_CHANGE,
+    };
+    i2s_set_pin(kI2sPort, &pin_config);
+    i2s_set_clk(kI2sPort, DAC_SAMPLE_RATE, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_STEREO);
+    i2s_zero_dma_buffer(kI2sPort);
+    s_driver_installed = true;
+    return true;
+}
+
+static void writeSilenceBlocks(i2s_port_t port, int n_blocks) {
+    int16_t silence[256 * 2];
+    memset(silence, 0, sizeof(silence));
+    for (int i = 0; i < n_blocks; i++) {
+        size_t written = 0;
+        i2s_write(port, silence, sizeof(silence), &written, portMAX_DELAY);
+    }
+}
+
+}  // namespace
 
 // ИНВАРИАНТ (см. SRS R.12): во время playing параметры программы (g_program/g_wave/
 // sample_rate) НЕ меняются. Меняется только g_gain (fade in/out) — это обёртка при
@@ -201,35 +273,11 @@ void DacControl::playerTask(void* arg) {
 
 void DacControl::init() {
     g_gain = 0.0f;
+    g_program = kIdleProgram;
     g_wave_len = 1;
     g_wave[0] = 0;
     g_wave[1] = 0;
-
-    i2s_config_t i2s_config = {
-        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
-        .sample_rate = DAC_SAMPLE_RATE,
-        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
-        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-        .dma_buf_count = 4,
-        .dma_buf_len = 256,
-        .use_apll = false,
-        .tx_desc_auto_clear = true,
-        .fixed_mclk = 0
-    };
-
-    i2s_driver_install(s_i2s_port, &i2s_config, 0, NULL);
-
-    i2s_pin_config_t pin_config = {
-        .bck_io_num   = I2S_BCLK,
-        .ws_io_num    = I2S_WCLK,
-        .data_out_num = I2S_DOUT,
-        .data_in_num  = I2S_PIN_NO_CHANGE,
-    };
-    i2s_set_pin(s_i2s_port, &pin_config);
-    i2s_set_clk(s_i2s_port, DAC_SAMPLE_RATE, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_STEREO);
-    i2s_zero_dma_buffer(s_i2s_port);
+    releaseDriver();
 }
 
 void DacControl::setProgram(const DacProgram& program) {
@@ -238,7 +286,6 @@ void DacControl::setProgram(const DacProgram& program) {
     if (p.amp_r_ma < 0.0f) p.amp_r_ma = 0.0f;
     if (p.sample_rate_hz <= 0) p.sample_rate_hz = DAC_SAMPLE_RATE;
     rebuildWave(p);
-    i2s_set_clk(s_i2s_port, (uint32_t)p.sample_rate_hz, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_STEREO);
     g_program = p;
 }
 
@@ -253,7 +300,6 @@ bool DacControl::setCustomWaveStereo(const int16_t* left, const int16_t* right, 
     if (!fill_custom_stereo(left, right, count, p.amp_l_ma, p.amp_r_ma)) {
         return false;
     }
-    i2s_set_clk(s_i2s_port, (uint32_t)p.sample_rate_hz, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_STEREO);
     g_program = p;
     return true;
 }
@@ -277,7 +323,16 @@ void DacControl::setCodeToMa(float codes_per_ma_l, float codes_per_ma_r) {
 
 void DacControl::start() {
     if (s_playing) return;
-    digitalWrite(EN_WAKEUP, HIGH);  // питание аналога только при активном сеансе
+    if (!ensureDriver()) return;
+
+    const uint32_t fs = (g_program.sample_rate_hz > 0)
+        ? (uint32_t)g_program.sample_rate_hz : (uint32_t)DAC_SAMPLE_RATE;
+    i2s_set_clk(s_i2s_port, fs, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_STEREO);
+    i2s_zero_dma_buffer(s_i2s_port);
+    i2s_start(s_i2s_port);
+    writeSilenceBlocks(s_i2s_port, 4);
+
+    digitalWrite(EN_WAKEUP, HIGH);
     s_playing = true;
 
     xTaskCreatePinnedToCore(playerTask, "dac_sin", 3072, NULL, 6, &s_task, 1);
@@ -296,7 +351,11 @@ void DacControl::stop() {
         vTaskDelete(s_task);
         s_task = nullptr;
     }
-    i2s_zero_dma_buffer(s_i2s_port);
-    g_gain = 0.0f;
     digitalWrite(EN_WAKEUP, LOW);
+    releaseDriver();
+    g_gain = 0.0f;
+    g_program = kIdleProgram;
+    g_wave_len = 1;
+    g_wave[0] = 0;
+    g_wave[1] = 0;
 }

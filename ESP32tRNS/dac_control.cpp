@@ -16,8 +16,12 @@ constexpr float    DEFAULT_AMP_MA = 1.0f;
 int16_t g_wave[MAX_WAVE_LEN * 2];
 size_t g_wave_len = 0;
 
-static int16_t maToPeakCodes(float ma) {
-    int32_t c = (int32_t)lroundf(ma * DEF_DAC_CODE_TO_MA);
+// Калибровка кодов ЦАП на 1 мА, поканально (TODO #1); задаётся из UI/NVS, дефолт из config.h.
+static volatile float g_code_to_ma_l = DEF_DAC_CODE_TO_MA_L;
+static volatile float g_code_to_ma_r = DEF_DAC_CODE_TO_MA_R;
+
+static int16_t maToPeakCodes(float ma, float code_to_ma) {
+    int32_t c = (int32_t)lroundf(ma * code_to_ma);
     if (c > 32767) c = 32767;
     if (c < 0)     c = 0;
     return (int16_t)c;
@@ -30,31 +34,62 @@ static float clamp01(float v) {
 }
 
 static void fill_const(const DacProgram& program) {
-    const int16_t amp_l = maToPeakCodes(program.amp_l_ma);
-    const int16_t amp_r = maToPeakCodes(program.amp_r_ma);
+    const int16_t amp_l = maToPeakCodes(program.amp_l_ma, g_code_to_ma_l);
+    const int16_t amp_r = maToPeakCodes(program.amp_r_ma, g_code_to_ma_r);
     g_wave_len = 1;
-    g_wave[0] = amp_r; // R
-    g_wave[1] = amp_l; // L
+    g_wave[0] = amp_l; // L (индекс 0 = физический левый канал, TODO #7)
+    g_wave[1] = amp_r; // R
 }
 
-static float fill_sin(DacProgram& program) {
-    float fs = (program.sample_rate_hz > 0) ? (float)program.sample_rate_hz : (float)DAC_SAMPLE_RATE;
-    float target = program.target_freq_hz;
-    if (target <= 0.0f) target = DEFAULT_SIN_HZ;
-    int period = (int)lroundf(fs / target);
-    if (period < MIN_SIN_PERIOD) period = MIN_SIN_PERIOD;
-    if (period > MAX_WAVE_LEN) period = MAX_WAVE_LEN;
-
-    const int16_t amp_l = maToPeakCodes(program.amp_l_ma);
-    const int16_t amp_r = maToPeakCodes(program.amp_r_ma);
-    g_wave_len = (size_t)period;
-    for (int i = 0; i < period; i++) {
-        float v = sinf(2.0f * (float)M_PI * (float)i / (float)period);
-        int32_t s = (int32_t)lroundf(v * 32767.0f);
-        g_wave[i * 2 + 0] = (int16_t)(((int32_t)s * amp_r) / 32768);
-        g_wave[i * 2 + 1] = (int16_t)(((int32_t)s * amp_l) / 32768);
+static int gcd_int(int a, int b) {
+    if (a < 0) a = -a;
+    if (b < 0) b = -b;
+    while (b != 0) {
+        int t = a % b;
+        a = b;
+        b = t;
     }
-    return fs / (float)period;
+    return (a > 0) ? a : 1;
+}
+
+static int lcm_int(int a, int b) {
+    if (a <= 0 || b <= 0) return 1;
+    return (a / gcd_int(a, b)) * b;
+}
+
+static void fill_sin(DacProgram& program) {
+    float fs = (program.sample_rate_hz > 0) ? (float)program.sample_rate_hz : (float)DAC_SAMPLE_RATE;
+    float target_l = program.target_freq_hz;
+    float target_r = program.target_freq_r_hz;
+    if (target_l <= 0.0f) target_l = DEFAULT_SIN_HZ;
+    if (target_r <= 0.0f) target_r = target_l;
+
+    int period_l = (int)lroundf(fs / target_l);
+    int period_r = (int)lroundf(fs / target_r);
+    if (period_l < MIN_SIN_PERIOD) period_l = MIN_SIN_PERIOD;
+    if (period_r < MIN_SIN_PERIOD) period_r = MIN_SIN_PERIOD;
+    if (period_l > MAX_WAVE_LEN) period_l = MAX_WAVE_LEN;
+    if (period_r > MAX_WAVE_LEN) period_r = MAX_WAVE_LEN;
+
+    int wave_len = lcm_int(period_l, period_r);
+    if (wave_len > MAX_WAVE_LEN) wave_len = (period_l > period_r) ? period_l : period_r;
+    if (wave_len > MAX_WAVE_LEN) wave_len = MAX_WAVE_LEN;
+
+    const int16_t amp_l = maToPeakCodes(program.amp_l_ma, g_code_to_ma_l);
+    const int16_t amp_r = maToPeakCodes(program.amp_r_ma, g_code_to_ma_r);
+    g_wave_len = (size_t)wave_len;
+    for (int i = 0; i < wave_len; i++) {
+        float vl = sinf(2.0f * (float)M_PI * (float)(i % period_l) / (float)period_l);
+        float vr = sinf(2.0f * (float)M_PI * (float)(i % period_r) / (float)period_r);
+        int32_t sl = (int32_t)lroundf(vl * 32767.0f);
+        int32_t sr = (int32_t)lroundf(vr * 32767.0f);
+        g_wave[i * 2 + 0] = (int16_t)(((int32_t)sl * amp_l) / 32768);
+        g_wave[i * 2 + 1] = (int16_t)(((int32_t)sr * amp_r) / 32768);
+    }
+    program.actual_freq_hz = fs / (float)period_l;
+    program.actual_freq_r_hz = fs / (float)period_r;
+    program.period_samples_l = period_l;
+    program.period_samples_r = period_r;
 }
 
 static bool fill_custom_stereo(const int16_t* left, const int16_t* right, size_t count,
@@ -73,8 +108,8 @@ static bool fill_custom_stereo(const int16_t* left, const int16_t* right, size_t
     if (peak_l <= 0) peak_l = 1;
     if (peak_r <= 0) peak_r = 1;
 
-    const int16_t amp_l = maToPeakCodes(amp_l_ma);
-    const int16_t amp_r = maToPeakCodes(amp_r_ma);
+    const int16_t amp_l = maToPeakCodes(amp_l_ma, g_code_to_ma_l);
+    const int16_t amp_r = maToPeakCodes(amp_r_ma, g_code_to_ma_r);
     g_wave_len = count;
     for (size_t i = 0; i < count; i++) {
         int32_t l = ((int32_t)left[i] * amp_l) / peak_l;
@@ -83,8 +118,8 @@ static bool fill_custom_stereo(const int16_t* left, const int16_t* right, size_t
         if (r < -32768) r = -32768;
         if (l > 32767) l = 32767;
         if (l < -32768) l = -32768;
-        g_wave[i * 2 + 0] = (int16_t)r; // R
-        g_wave[i * 2 + 1] = (int16_t)l; // L
+        g_wave[i * 2 + 0] = (int16_t)l; // L (индекс 0, TODO #7)
+        g_wave[i * 2 + 1] = (int16_t)r; // R
     }
     return true;
 }
@@ -94,7 +129,10 @@ static DacProgram g_program = {
     DEFAULT_AMP_MA,
     DEFAULT_AMP_MA,
     DEFAULT_SIN_HZ,
-    DEFAULT_SIN_HZ
+    DEFAULT_SIN_HZ,
+    DEFAULT_SIN_HZ,
+    DEFAULT_SIN_HZ,
+    DAC_SAMPLE_RATE
 };
 static volatile float g_gain = 1.0f;
 
@@ -102,13 +140,19 @@ static void rebuildWave(DacProgram& program) {
     if (program.waveform == DacWaveform::CONST_DC) {
         fill_const(program);
         program.actual_freq_hz = 0.0f;
+        program.actual_freq_r_hz = 0.0f;
+        program.period_samples_l = 0;
+        program.period_samples_r = 0;
         return;
     }
     if (program.waveform == DacWaveform::CUSTOM) {
         program.actual_freq_hz = 0.0f;
+        program.actual_freq_r_hz = 0.0f;
+        program.period_samples_l = 0;
+        program.period_samples_r = 0;
         return;
     }
-    program.actual_freq_hz = fill_sin(program);
+    fill_sin(program);
 }
 
 }  // namespace
@@ -134,19 +178,24 @@ void DacControl::playerTask(void* arg) {
         int16_t buf[256 * 2];
         const float gain = clamp01(g_gain);
         for (int j = 0; j < 256; j++) {
-            int32_t r = (int32_t)lroundf((float)g_wave[k * 2 + 0] * gain);
-            int32_t l = (int32_t)lroundf((float)g_wave[k * 2 + 1] * gain);
-            if (r > 32767) r = 32767;
-            if (r < -32768) r = -32768;
-            if (l > 32767) l = 32767;
-            if (l < -32768) l = -32768;
-            buf[j * 2 + 0] = (int16_t)r;
-            buf[j * 2 + 1] = (int16_t)l;
+            // Позиционное копирование: индекс 0 = L, индекс 1 = R (TODO #7).
+            int32_t ch0 = (int32_t)lroundf((float)g_wave[k * 2 + 0] * gain);
+            int32_t ch1 = (int32_t)lroundf((float)g_wave[k * 2 + 1] * gain);
+            if (ch0 > 32767) ch0 = 32767;
+            if (ch0 < -32768) ch0 = -32768;
+            if (ch1 > 32767) ch1 = 32767;
+            if (ch1 < -32768) ch1 = -32768;
+            buf[j * 2 + 0] = (int16_t)ch0;
+            buf[j * 2 + 1] = (int16_t)ch1;
             if (++k >= g_wave_len) k = 0;
         }
         size_t written = 0;
         i2s_write(s_i2s_port, buf, sizeof(buf), &written, portMAX_DELAY);
     }
+    // Грациозный выход: помечаем завершение до самоудаления, чтобы stop() не убивал
+    // задачу, заблокированную внутри i2s_write (иначе мьютекс драйвера остаётся
+    // захваченным навсегда -> повторный старт виснет). См. TODO #6.
+    s_task = nullptr;
     vTaskDelete(nullptr);
 }
 
@@ -218,6 +267,11 @@ float DacControl::gain() {
     return clamp01(g_gain);
 }
 
+void DacControl::setCodeToMa(float codes_per_ma_l, float codes_per_ma_r) {
+    g_code_to_ma_l = (codes_per_ma_l > 0.0f) ? codes_per_ma_l : DEF_DAC_CODE_TO_MA_L;
+    g_code_to_ma_r = (codes_per_ma_r > 0.0f) ? codes_per_ma_r : DEF_DAC_CODE_TO_MA_R;
+}
+
 void DacControl::start() {
     if (s_playing) return;
     s_playing = true;
@@ -230,7 +284,12 @@ void DacControl::stop() {
     if (!s_playing) return;
     s_playing = false;
 
-    if (s_task) {
+    // Ждём, пока playerTask сам выйдет из цикла (i2s_write возвращается каждые ~32 мс)
+    // и освободит мьютекс драйвера. Только потом трогаем i2s. См. TODO #6.
+    for (int i = 0; i < 100 && s_task != nullptr; i++) {
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    if (s_task) {  // подстраховка на случай зависания
         vTaskDelete(s_task);
         s_task = nullptr;
     }

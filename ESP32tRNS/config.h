@@ -12,7 +12,8 @@
 #define NEOPIXEL_PIN  47  // SPICLC_P
 
 // BATTERY AND POWER
-#define PLUS_BAT_ADC  6   // аналоговый вход с делителя 360k/100k батарейки 3.7V 
+#define PLUS_BAT_ADC  6   // аналоговый вход с делителя 360k/100k батарейки 3.7V
+#define MIN_BATTERY_START_PCT  40   // ниже — запрет старта сеанса (TODO #3)
 #define CHRG_PIN      7   // TP4054 CHRG (open drain): к GND пока идёт заряд; hi-Z когда нет. К ESP через R или напрямую; INPUT_PULLUP
 #define EN_WAKEUP     17  // выход вкл. аналоговые модули
 #define USB_DET       21  // вход детектор VBUS c USB c делителя 51k/100k
@@ -22,7 +23,12 @@
 #define I2S_WCLK               35          // LRCK (Word select / LRC) PCM5102A  
 #define I2S_DOUT               37          // DIN (Data in) PCM5102A
 #define DAC_SAMPLE_RATE         8000
-#define DEF_DAC_CODE_TO_MA     5500.0f     // коды/мА (калибровка: ~1В ≈ 2мА)
+// Калибровка кодов ЦАП на 1 мА — поканально (TODO #1)
+#define DEF_DAC_CODE_TO_MA_L   5900.0f     // коды/мА, левый канал
+#define DEF_DAC_CODE_TO_MA_R   5900.0f     // коды/мА, правый канал
+#define CAL_DAC_CODE_MIN       1000.0f     // диапазон/шаг редактора калибровки
+#define CAL_DAC_CODE_MAX       12000.0f
+#define CAL_DAC_CODE_STEP      50.0f
 
 // I2C OLED Display (128x64, SSD1306) ---
 #define OLED_SDA  8
@@ -38,7 +44,13 @@
 #define ADC_MAX_VOLTAGE         3.3f
 #define DEF_ADC_OFFSET_L_V      1.18f   // V offset для левого канала
 #define DEF_ADC_OFFSET_R_V      1.18f   // V offset для правого канала
-#define DEF_ADC_V_TO_MA         0.37f   // коэффициент пересчета V -> mA
+#define CAL_VOFFSET_MIN         0.0f    // диапазон/шаг редактора V offset
+#define CAL_VOFFSET_MAX         3.30f
+#define CAL_VOFFSET_STEP        0.01f
+#define DEF_ADC_V_TO_MA         2.7f   // коэффициент пересчета V -> mA
+#define CAL_V_TO_MA_MIN         0.0f    // диапазон/шаг редактора V->mA
+#define CAL_V_TO_MA_MAX         10.0f
+#define CAL_V_TO_MA_STEP        0.05f
 
 #define ADC_RAW_RATE_HZ         32000
 #define ADC_OUT_RATE_HZ         8000
@@ -46,7 +58,7 @@
 #define ADC_FRAME_SIZE          256
 #define ADC_DMA_BUF_COUNT       4
 #define ADC_RING_SIZE           8192
-#define ADC_STATS_WINDOW_MS     200
+#define ADC_STATS_WINDOW_MS     1024   // кольцо 8192 @ 8кГц ≈ 1 с — как в v0.9.0
 #define ADC_STATS_WINDOW_SAMPLES ((ADC_STATS_WINDOW_MS * ADC_OUT_RATE_HZ) / 1000)
 #define ADC_CAPTURE_DELAY_MS    300
 #define ADC_READ_TIMEOUT_MS     10

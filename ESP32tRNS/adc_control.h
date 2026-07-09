@@ -20,11 +20,10 @@ public:
     static AdcChannelStats statsLeft();
     static AdcChannelStats statsRight();
 
-    // Осциллограф (R.6/R.8): децимированная трасса окна в вольтах.
-    // out[0..width-1] — окно длиной window_samples (в семплах ADC, 0 = весь буфер),
-    // заканчивающееся start_offset семплов от конца. Возвращает false если данных мало.
+    // Осциллограф (TODO #8): децимированная трасса в вольтах, out[0..width-1].
+    // period_samples — целое число семплов ADC на период; n_periods=0 -> free-run.
     static bool scopeTrace(bool left, float* out, uint8_t width,
-                           uint32_t window_samples, uint32_t start_offset);
+                           uint32_t period_samples, uint8_t n_periods);
 
 private:
     static bool s_running;

@@ -56,8 +56,7 @@ static AdcChannelStats computeStats(const float* ring) {
     if (count > ADC_RING_SIZE) count = ADC_RING_SIZE;
     if (count < (uint32_t)(ADC_OUT_RATE_HZ / 10)) return out;
 
-    uint32_t n = ADC_STATS_WINDOW_SAMPLES;
-    if (n > count) n = count;
+    uint32_t n = count;
 
     uint32_t start = (s_wr_idx + ADC_RING_SIZE - n) % ADC_RING_SIZE;
     double sum = 0.0, sum2 = 0.0;
@@ -84,22 +83,43 @@ static AdcChannelStats computeStats(const float* ring) {
     return out;
 }
 
+// Стабильная развёртка (TODO #8). s_wr_idx — монотонный абсолютный счётчик выходных
+// отсчётов с начала сеанса, поэтому номер отсчёта = его время (Fs фиксирована).
+// Синхронный режим: старт окна выравниваем по сетке периодов от абсолютного нуля
+// (start_abs = целое число периодов), тогда фаза старта одинакова в каждом кадре
+// и картинка стоит. Требуем, чтобы (n+1) периодов ещё лежали в кольце.
 static bool scopeTraceImpl(const float* ring, float* out, uint8_t width,
-                           uint32_t window_samples, uint32_t start_offset) {
+                           uint32_t period_samples, uint8_t n_periods) {
     uint32_t count = s_wr_idx;
     if (count > ADC_RING_SIZE) count = ADC_RING_SIZE;
-    if (count < (uint32_t)(ADC_OUT_RATE_HZ / 10)) return false;  // < 100 мс данных
+    if (count < (uint32_t)(ADC_OUT_RATE_HZ / 10)) return false;
 
-    if (window_samples == 0 || window_samples > count) window_samples = count;
-    uint32_t decim = window_samples / width;
-    if (decim < 1) decim = 1;
-    uint32_t span = decim * width;
-    if (span > count) span = count;
+    const uint32_t newest = s_wr_idx;
+    uint32_t start_abs, span, hi;
 
-    uint32_t start = (s_wr_idx + ADC_RING_SIZE - span - start_offset) % ADC_RING_SIZE;
+    const uint32_t T = period_samples;
+    const uint32_t m = (T >= 2) ? (newest / T) : 0;
+    const bool synced = (T >= 2) && (n_periods > 0) && (m >= n_periods) &&
+                        ((n_periods + 1) * T <= count);
+    if (synced) {
+        // Окно ровно n целых периодов, правый край — граница периода (не newest).
+        span      = (uint32_t)n_periods * T;
+        start_abs = m * T - span;
+        hi        = m * T - 1;
+    } else {
+        span = (T >= 2) ? count : (uint32_t)(0.2f * ADC_OUT_RATE_HZ);
+        if (span > count) span = count;
+        if (span < width) span = width;
+        start_abs = (newest > span) ? (newest - span) : 0;
+        hi        = (newest > 0) ? (newest - 1) : 0;
+    }
+
+    const uint32_t lo = (newest > count) ? (newest - count) : 0;
     for (uint8_t x = 0; x < width; x++) {
-        uint32_t idx = (start + (uint32_t)x * decim) % ADC_RING_SIZE;
-        out[x] = ring[idx];
+        uint32_t abs_idx = start_abs + (uint32_t)(((uint64_t)x * span) / width);
+        if (abs_idx < lo) abs_idx = lo;
+        if (abs_idx > hi) abs_idx = hi;
+        out[x] = ring[abs_idx % ADC_RING_SIZE];
     }
     return true;
 }
@@ -161,6 +181,9 @@ void adcTask(void*) {
         }
     }
 
+    // Грациозный выход (см. TODO #6): помечаем завершение до самоудаления, чтобы stop()
+    // не убивал задачу, заблокированную в adc_continuous_read.
+    s_task = nullptr;
     vTaskDelete(nullptr);
 }
 
@@ -225,7 +248,12 @@ void AdcControl::stop() {
     if (!s_running) return;
     s_running = false;
 
-    if (s_task) {
+    // Ждём, пока adcTask сам выйдет (adc_continuous_read возвращается по таймауту ~10 мс)
+    // и освободит драйвер. Только потом останавливаем ADC. См. TODO #6.
+    for (int i = 0; i < 100 && s_task != nullptr; i++) {
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    if (s_task) {  // подстраховка
         vTaskDelete(s_task);
         s_task = nullptr;
     }
@@ -238,6 +266,6 @@ AdcChannelStats AdcControl::statsLeft()  { return computeStats(s_ring_l); }
 AdcChannelStats AdcControl::statsRight() { return computeStats(s_ring_r); }
 
 bool AdcControl::scopeTrace(bool left, float* out, uint8_t width,
-                            uint32_t window_samples, uint32_t start_offset) {
-    return scopeTraceImpl(left ? s_ring_l : s_ring_r, out, width, window_samples, start_offset);
+                            uint32_t period_samples, uint8_t n_periods) {
+    return scopeTraceImpl(left ? s_ring_l : s_ring_r, out, width, period_samples, n_periods);
 }

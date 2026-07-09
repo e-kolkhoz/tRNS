@@ -16,9 +16,13 @@ struct DacProgram {
     DacWaveform waveform = DacWaveform::CONST_DC;
     float amp_l_ma = 1.0f;
     float amp_r_ma = 1.0f;
-    float target_freq_hz = 200.0f;   // используется для SIN
-    float actual_freq_hz = 200.0f;   // вычисляется после квантизации периода
-    int   sample_rate_hz = 8000;     // Fs тракта DAC (из пресета/WAV), см. R.7
+    float target_freq_hz = 200.0f;     // целевая частота L (SIN)
+    float target_freq_r_hz = 200.0f;   // целевая частота R (SIN, TODO #5)
+    float actual_freq_hz = 200.0f;     // фактическая частота L после квантизации
+    float actual_freq_r_hz = 200.0f;   // фактическая частота R
+    int   period_samples_l = 0;        // целый период L в семплах (для осциллографа)
+    int   period_samples_r = 0;
+    int   sample_rate_hz = 8000;       // Fs тракта DAC (из пресета/WAV), см. R.7
 };
 
 class DacControl {
@@ -32,6 +36,9 @@ public:
     static DacProgram program();
     static void setGain(float gain01);
     static float gain();
+
+    // Калибровка: кодов ЦАП на 1 мА, поканально (TODO #1). Дефолты DEF_DAC_CODE_TO_MA_L/R.
+    static void setCodeToMa(float codes_per_ma_l, float codes_per_ma_r);
 
     static bool isPlaying() { return s_playing; }
 

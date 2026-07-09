@@ -6,7 +6,7 @@
 enum class DacWaveform : uint8_t {
     CONST_DC = 0,
     SIN = 1,
-    CUSTOM = 3,
+    WAV = 3,
 };
 
 // Максимум семплов на канал в таблице волны (лимит RAM + валидации периода).

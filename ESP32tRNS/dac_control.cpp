@@ -149,7 +149,7 @@ static void rebuildWave(DacProgram& program) {
         program.period_samples_r = 0;
         return;
     }
-    if (program.waveform == DacWaveform::CUSTOM) {
+    if (program.waveform == DacWaveform::WAV) {
         program.actual_freq_hz = 0.0f;
         program.actual_freq_r_hz = 0.0f;
         program.period_samples_l = 0;
@@ -292,7 +292,7 @@ void DacControl::setProgram(const DacProgram& program) {
 bool DacControl::setCustomWaveStereo(const int16_t* left, const int16_t* right, size_t count,
                                      float amp_l_ma, float amp_r_ma, int sample_rate_hz) {
     DacProgram p = g_program;
-    p.waveform = DacWaveform::CUSTOM;
+    p.waveform = DacWaveform::WAV;
     p.amp_l_ma = (amp_l_ma < 0.0f) ? 0.0f : amp_l_ma;
     p.amp_r_ma = (amp_r_ma < 0.0f) ? 0.0f : amp_r_ma;
     p.actual_freq_hz = 0.0f;

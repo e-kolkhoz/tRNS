@@ -462,7 +462,7 @@ static void startSession(const PresetDefinition& preset, const PresetRuntime& rt
 
   DacControl::setGain(0.0f);
   DacControl::start();
-  AdcControl::start();
+  AdcControl::start(g_cal_voffset_l, g_cal_voffset_r);
 
   session_state = STATE_FADEIN;
   session_state_start_ms = millis();
@@ -636,13 +636,13 @@ static void drawMeterAndProgress(const char* metric) {
 static void drawBothChannelBlock(bool left, int y, const AdcChannelStats& st) {
   const float off = left ? g_cal_voffset_l : g_cal_voffset_r;
   const float k   = left ? g_cal_v_to_ma_l : g_cal_v_to_ma_r;
-  char l1[24], l2[28];
+  char l1[24], l2[32];
   if (st.valid) {
     const float peak_v  = fmaxf(fabsf(st.max_v - off), fabsf(st.min_v - off));
     const float max_ma  = peak_v * k;
     const float mean_ma = fabsf(st.mean_v - off) * k;
     snprintf(l1, sizeof(l1), "%c: макс. %.2fмА", left ? 'L' : 'R', max_ma);
-    snprintf(l2, sizeof(l2), "   ср. %.2f мА (%.2fВ)", mean_ma, st.mean_v);
+    snprintf(l2, sizeof(l2), "   ср. %.2fмА (%.2fВ)", mean_ma, st.mean_v);
   } else {
     snprintf(l1, sizeof(l1), "%c: макс. --", left ? 'L' : 'R');
     snprintf(l2, sizeof(l2), "   ср. -- (--)");
@@ -659,25 +659,25 @@ static void drawDashboard() {
   const float fb_l = feedbackForChannel(l, true);
   const float fb_r = feedbackForChannel(r, false);
 
-  char header[42], metric[20];
+  char header[48], metric[20];
   if (dashboard_view == DASH_BOTH) {
-    // L+R (TODO #14): <имя> [Hz] mA <заряд>% ; поканально макс./ср. мА + среднее ADC (В).
+    // L+R (TODO #14): <имя> [Hz] mA ; поканально макс./ср. мА + среднее ADC (В).
     oled.setFont(u8g2_font_5x8_t_cyrillic);
-    char head[36];
+    char head[48];
     if (session_channels_both) {
       if (session_type == PresetType::SIN) {
-        snprintf(head, sizeof(head), "%.4s %.0f/%.0fHz %.1f/%.1fmA",
+        snprintf(head, sizeof(head), "%s %.0f/%.0fHz %.1f/%.1fmA",
                  session_name.c_str(), session_freq_l_hz, session_freq_r_hz,
                  session_amp_l_mA, session_amp_r_mA);
       } else {
-        snprintf(head, sizeof(head), "%.6s L%.1f/R%.1fmA",
+        snprintf(head, sizeof(head), "%s L%.1f/R%.1fmA",
                  session_name.c_str(), session_amp_l_mA, session_amp_r_mA);
       }
     } else if (session_type == PresetType::SIN) {
-      snprintf(head, sizeof(head), "%.7s %.0fHz %.1fmA",
+      snprintf(head, sizeof(head), "%s %.0fHz %.1fmA",
                session_name.c_str(), session_freq_l_hz, session_amp_l_mA);
     } else {
-      snprintf(head, sizeof(head), "%.10s %.1fmA", session_name.c_str(), session_amp_l_mA);
+      snprintf(head, sizeof(head), "%s %.1fmA", session_name.c_str(), session_amp_l_mA);
     }
     oled.drawUTF8(0, 0, head);
     char batt[8];
@@ -689,7 +689,7 @@ static void drawDashboard() {
 
     uint32_t elapsed = (millis() - session_started_ms) / 1000;
     char tb[24];
-    snprintf(tb, sizeof(tb), "t %u:%02u / %.0fm",
+    snprintf(tb, sizeof(tb), "t %u:%02u / %.0fм",
              (unsigned)(elapsed / 60), (unsigned)(elapsed % 60), session_duration_min);
     oled.drawUTF8(0, 48, tb);
 
@@ -740,12 +740,12 @@ static void drawConfirm() {
   oled.drawUTF8(0, 0, title);
   if (menu_selected == 0) {
     oled.drawUTF8(0, 24, "> Нет");
-    char no2[28];
+    char no2[32];
     snprintf(no2, sizeof(no2), "  %s", yes_lbl);
     oled.drawUTF8(0, 38, no2);
   } else {
     oled.drawUTF8(0, 24, "  Нет");
-    char yes2[28];
+    char yes2[32];
     snprintf(yes2, sizeof(yes2), "> %s", yes_lbl);
     oled.drawUTF8(0, 38, yes2);
   }
@@ -774,8 +774,8 @@ static void drawFinish() {
   oled.setFont(u8g2_font_7x13_t_cyrillic);
   oled.drawUTF8(0, 0, "СЕАНС ЗАВЕРШЕН");
   oled.setFont(u8g2_font_6x12_t_cyrillic);
-  char line[28];
-  snprintf(line, sizeof(line), "%.14s L%.1f/R%.1fmA", session_name.c_str(),
+  char line[40];
+  snprintf(line, sizeof(line), "%s L%.1f/R%.1fmA", session_name.c_str(),
            session_amp_l_mA, session_channels_both ? session_amp_r_mA : 0.0f);
   oled.drawUTF8(0, 22, line);
   uint32_t mins = session_elapsed_sec / 60;
@@ -830,15 +830,15 @@ static int buildPresetMenu(const PresetDefinition& p, PresetRuntime& rt,
 
   items[n] = { PMI_PARAM, "Длительность, мин", &rt.duration_min,
                p.duration_min.min_v, p.duration_min.max_v, p.duration_min.step, true };
-  snprintf(labels[n], 36, "Длительность: %.0f мин", rt.duration_min); n++;
+  snprintf(labels[n], 36, "Длит.: %.0f мин", rt.duration_min); n++;
 
   items[n] = { PMI_PARAM, "Плавный старт, с", &rt.fade_in_sec,
                p.fade_in_sec.min_v, p.fade_in_sec.max_v, p.fade_in_sec.step, true };
-  snprintf(labels[n], 36, "Плавный старт: %.0f с", rt.fade_in_sec); n++;
+  snprintf(labels[n], 36, "Плавн.старт: %.0fс", rt.fade_in_sec); n++;
 
   items[n] = { PMI_PARAM, "Плавный стоп, с", &rt.fade_out_sec,
                p.fade_out_sec.min_v, p.fade_out_sec.max_v, p.fade_out_sec.step, true };
-  snprintf(labels[n], 36, "Плавный стоп: %.0f с", rt.fade_out_sec); n++;
+  snprintf(labels[n], 36, "Плавн.стоп: %.0fс", rt.fade_out_sec); n++;
 
   items[n] = { PMI_BACK, nullptr, nullptr, 0, 0, 0, false };
   snprintf(labels[n], 36, "<-Назад"); n++;
@@ -852,11 +852,11 @@ static void drawCurrentScreen() {
     case SCR_MAIN_MENU: {
       int n = (int)g_presets.size();
       if (n > MENU_MAX_PRESETS) n = MENU_MAX_PRESETS;
-      static char labels[MENU_MAX_PRESETS + 1][24];
+      static char labels[MENU_MAX_PRESETS + 1][40];
       const char* items[MENU_MAX_PRESETS + 2];
       int cnt = 0;
       for (int i = 0; i < n; i++) {
-        snprintf(labels[cnt], sizeof(labels[cnt]), "%.20s", g_presets[i].name.c_str());
+        snprintf(labels[cnt], sizeof(labels[cnt]), "%s", g_presets[i].name.c_str());
         items[cnt] = labels[cnt];
         cnt++;
       }
@@ -877,8 +877,8 @@ static void drawCurrentScreen() {
       const char* choices2[PRESET_MENU_MAX_ITEMS];
       int cnt = buildPresetMenu(p, rt, entries, labels);
       for (int i = 0; i < cnt; i++) choices2[i] = labels[i];
-      char title[24];
-      snprintf(title, sizeof(title), "== %.12s ==", p.name.c_str());
+      char title[40];
+      snprintf(title, sizeof(title), "== %s ==", p.name.c_str());
       renderMenu(title, choices2, cnt);
       break;
     }
@@ -894,7 +894,7 @@ static void drawCurrentScreen() {
       sitems[scnt++] = slabels[2];
       snprintf(slabels[scnt], 36, "UF2");
       sitems[scnt++] = slabels[3];
-      snprintf(slabels[scnt], 36, "Прошивка: %s", FIRMWARE_VERSION);
+      snprintf(slabels[scnt], 36, "%s", FIRMWARE_VERSION);
       sitems[scnt++] = slabels[4];
       snprintf(slabels[scnt], 36, "Сброс пресетов");
       sitems[scnt++] = slabels[5];
@@ -1093,7 +1093,7 @@ static void handleClick() {
 
 // --- Глубокий сон, пробуждение по нажатию ENC_S ---
 static void go_sleep() {
-  digitalWrite(EN_WAKEUP, LOW);            // выключаем аналоговые модули
+  // digitalWrite(EN_WAKEUP, LOW);  // GPIO17 = EN_WAKEUP + PCM5102A XSMT: эксперимент — не гасим
   rgbLedWrite(NEOPIXEL_PIN, 0, 0, 0);     // гасим неопиксель
   oled.setPowerSave(1);                    // гасим экран
   // Ждём пока кнопка точно отпущена
@@ -1162,10 +1162,11 @@ static void init_enc_oled() {
 void setup() {
   BootControl::init();   // снять GPIO hold если остался с прошлой сессии UF2
 
-  // Аналоговая часть ВЫКЛ до явного старта сеанса (POWER_CONTROL.md).
-  // HIGH подаётся только в DacControl::start(), LOW — в stop() и go_sleep().
+  // GPIO17 = EN_WAKEUP (биполярник) + PCM5102A XSMT (SOFT MUTE), общая линия.
+  // Эксперимент: не гасим — иначе XSMT mute ломает нулевой поток после stop.
   pinMode(EN_WAKEUP, OUTPUT);
-  digitalWrite(EN_WAKEUP, LOW);
+  // digitalWrite(EN_WAKEUP, LOW);
+  digitalWrite(EN_WAKEUP, HIGH);
 
   pinMode(USB_DET, INPUT);
   pinMode(CHRG_PIN, INPUT_PULLUP);

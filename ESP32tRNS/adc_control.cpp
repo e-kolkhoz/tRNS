@@ -225,15 +225,15 @@ void AdcControl::init() {
     s_configured = (adc_continuous_config(s_adc, &cfg) == ESP_OK);
 }
 
-void AdcControl::start() {
+void AdcControl::start(float off_l_v, float off_r_v) {
     if (s_running || !s_adc || !s_configured) return;
 
     s_wr_idx = 0;
     s_dec_l = {};
     s_dec_r = {};
     for (uint32_t i = 0; i < ADC_RING_SIZE; ++i) {
-        s_ring_l[i] = DEF_ADC_OFFSET_L_V;
-        s_ring_r[i] = DEF_ADC_OFFSET_R_V;
+        s_ring_l[i] = off_l_v;
+        s_ring_r[i] = off_r_v;
     }
 
     if (adc_continuous_start(s_adc) != ESP_OK) {

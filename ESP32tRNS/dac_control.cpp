@@ -170,25 +170,6 @@ namespace {
 static bool s_driver_installed = false;
 static constexpr i2s_port_t kI2sPort = I2S_NUM_0;
 
-static void parkI2sPins() {
-    pinMode(I2S_BCLK, OUTPUT);
-    pinMode(I2S_WCLK, OUTPUT);
-    pinMode(I2S_DOUT, OUTPUT);
-    digitalWrite(I2S_BCLK, LOW);
-    digitalWrite(I2S_WCLK, LOW);
-    digitalWrite(I2S_DOUT, LOW);
-}
-
-static void releaseDriver() {
-    if (s_driver_installed) {
-        i2s_stop(kI2sPort);
-        i2s_zero_dma_buffer(kI2sPort);
-        i2s_driver_uninstall(kI2sPort);
-        s_driver_installed = false;
-    }
-    parkI2sPins();
-}
-
 static bool ensureDriver() {
     if (s_driver_installed) return true;
 
@@ -238,37 +219,35 @@ static void writeSilenceBlocks(i2s_port_t port, int n_blocks) {
 // заполнении буфера DAC, а не изменение параметров пресета. Поэтому playerTask читает
 // общий g_wave на другом ядре без блокировок безопасно: setProgram/setCustomWaveStereo
 // вызываются строго до start() и после stop().
+// PCM5102 без тактов выдаёт мусор на выходе — I2S всегда тактует нули вне сеанса.
+// releaseDriver/parkI2sPins/i2s_stop в stop() запрещены (скачок после fade).
 void DacControl::playerTask(void* arg) {
     (void)arg;
     size_t k = 0;
 
-    while (s_playing) {
-        if (g_wave_len == 0) {
-            vTaskDelay(pdMS_TO_TICKS(5));
-            continue;
-        }
+    for (;;) {
         int16_t buf[256 * 2];
-        const float gain = clamp01(g_gain);
-        for (int j = 0; j < 256; j++) {
-            // Позиционное копирование: индекс 0 = L, индекс 1 = R (TODO #7).
-            int32_t ch0 = (int32_t)lroundf((float)g_wave[k * 2 + 0] * gain);
-            int32_t ch1 = (int32_t)lroundf((float)g_wave[k * 2 + 1] * gain);
-            if (ch0 > 32767) ch0 = 32767;
-            if (ch0 < -32768) ch0 = -32768;
-            if (ch1 > 32767) ch1 = 32767;
-            if (ch1 < -32768) ch1 = -32768;
-            buf[j * 2 + 0] = (int16_t)ch0;
-            buf[j * 2 + 1] = (int16_t)ch1;
-            if (++k >= g_wave_len) k = 0;
+        if (s_playing && g_wave_len > 0) {
+            const float gain = clamp01(g_gain);
+            for (int j = 0; j < 256; j++) {
+                // g_wave: 0=L, 1=R. RIGHT_LEFT: buf[0]=R, buf[1]=L на шине I2S (TODO #7).
+                int32_t ch_l = (int32_t)lroundf((float)g_wave[k * 2 + 0] * gain);
+                int32_t ch_r = (int32_t)lroundf((float)g_wave[k * 2 + 1] * gain);
+                if (ch_l > 32767) ch_l = 32767;
+                if (ch_l < -32768) ch_l = -32768;
+                if (ch_r > 32767) ch_r = 32767;
+                if (ch_r < -32768) ch_r = -32768;
+                buf[j * 2 + 0] = (int16_t)ch_r;
+                buf[j * 2 + 1] = (int16_t)ch_l;
+                if (++k >= g_wave_len) k = 0;
+            }
+        } else {
+            memset(buf, 0, sizeof(buf));
+            k = 0;
         }
         size_t written = 0;
         i2s_write(s_i2s_port, buf, sizeof(buf), &written, portMAX_DELAY);
     }
-    // Грациозный выход: помечаем завершение до самоудаления, чтобы stop() не убивал
-    // задачу, заблокированную внутри i2s_write (иначе мьютекс драйвера остаётся
-    // захваченным навсегда -> повторный старт виснет). См. TODO #6.
-    s_task = nullptr;
-    vTaskDelete(nullptr);
 }
 
 void DacControl::init() {
@@ -277,7 +256,16 @@ void DacControl::init() {
     g_wave_len = 1;
     g_wave[0] = 0;
     g_wave[1] = 0;
-    releaseDriver();
+    s_playing = false;
+
+    if (!ensureDriver()) return;
+    i2s_zero_dma_buffer(s_i2s_port);
+    i2s_start(s_i2s_port);
+    writeSilenceBlocks(s_i2s_port, 4);
+
+    if (s_task == nullptr) {
+        xTaskCreatePinnedToCore(playerTask, "dac_sin", 3072, NULL, 6, &s_task, 1);
+    }
 }
 
 void DacControl::setProgram(const DacProgram& program) {
@@ -330,32 +318,24 @@ void DacControl::start() {
     i2s_set_clk(s_i2s_port, fs, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_STEREO);
     i2s_zero_dma_buffer(s_i2s_port);
     i2s_start(s_i2s_port);
-    writeSilenceBlocks(s_i2s_port, 4);
+
+    // Задача уже крутится с init(); writeSilenceBlocks здесь = deadlock на i2s_write.
+    if (s_task == nullptr) {
+        writeSilenceBlocks(s_i2s_port, 4);
+        xTaskCreatePinnedToCore(playerTask, "dac_sin", 3072, NULL, 6, &s_task, 1);
+    }
 
     digitalWrite(EN_WAKEUP, HIGH);
     s_playing = true;
-
-    xTaskCreatePinnedToCore(playerTask, "dac_sin", 3072, NULL, 6, &s_task, 1);
 }
 
 void DacControl::stop() {
     if (!s_playing) return;
     s_playing = false;
-
-    // Ждём, пока playerTask сам выйдет из цикла (i2s_write возвращается каждые ~32 мс)
-    // и освободит мьютекс драйвера. Только потом трогаем i2s. См. TODO #6.
-    for (int i = 0; i < 100 && s_task != nullptr; i++) {
-        vTaskDelay(pdMS_TO_TICKS(5));
-    }
-    if (s_task) {  // подстраховка на случай зависания
-        vTaskDelete(s_task);
-        s_task = nullptr;
-    }
-    digitalWrite(EN_WAKEUP, LOW);
-    releaseDriver();
     g_gain = 0.0f;
     g_program = kIdleProgram;
     g_wave_len = 1;
     g_wave[0] = 0;
     g_wave[1] = 0;
+    // digitalWrite(EN_WAKEUP, LOW);  // GPIO17 = EN_WAKEUP + PCM5102A XSMT: эксперимент — не гасим
 }

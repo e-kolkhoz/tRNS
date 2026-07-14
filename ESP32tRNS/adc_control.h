@@ -13,7 +13,7 @@ struct AdcChannelStats {
 class AdcControl {
 public:
     static void init();
-    static void start();
+    static void start(float off_l_v, float off_r_v);
     static void stop();
     static bool isRunning() { return s_running; }
 

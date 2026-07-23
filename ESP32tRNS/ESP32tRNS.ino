@@ -48,6 +48,7 @@ enum ScreenType : uint8_t {
   SCR_DASHBOARD,
   SCR_CONFIRM,
   SCR_FINISH,
+  SCR_PRE_START,
   SCR_ERROR,         // экран ошибки старта (TODO #2/#3)
 };
 
@@ -124,7 +125,7 @@ static uint8_t menu_selected = 0;
 static ConfirmKind confirm_kind = CONFIRM_STOP_SESSION;
 static int active_preset_idx = -1;
 static SessionState session_state = STATE_IDLE;
-static DashboardView dashboard_view = DASH_BOTH;
+static DashboardView dashboard_view = DASH_LEFT;
 static bool session_just_finished = false;
 static uint32_t session_state_start_ms = 0;
 static uint32_t session_started_ms = 0;
@@ -162,11 +163,20 @@ static char g_error_msg[40] = "";  // текст экрана ошибки ст�
 
 static inline ScreenType currentScreen() { return screen_stack[stack_depth]; }
 
+static void syncEnWakeup() {
+  const ScreenType scr = currentScreen();
+  const bool on = (scr == SCR_PRE_START || scr == SCR_FINISH ||
+                   (session_state != STATE_IDLE &&
+                    (scr == SCR_DASHBOARD || scr == SCR_CONFIRM)));
+  digitalWrite(EN_WAKEUP, on ? HIGH : LOW);
+}
+
 // Сброс навигации на конкретный корневой экран (вместо ручного stack_depth=0 + присваивания).
 static void resetToScreen(ScreenType scr) {
   stack_depth = 0;
   screen_stack[0] = scr;
   menu_selected = 0;
+  syncEnWakeup();
 }
 
 static void go_sleep();
@@ -337,6 +347,7 @@ static void pushScreen(ScreenType scr) {
     stack_depth++;
     screen_stack[stack_depth] = scr;
     menu_selected = 0;
+    syncEnWakeup();
   }
 }
 
@@ -344,6 +355,7 @@ static void popScreen() {
   if (stack_depth > 0) {
     stack_depth--;
     menu_selected = 0;
+    syncEnWakeup();
   }
 }
 
@@ -393,7 +405,7 @@ static void beginFadeOut() {
 
 static void startSession(const PresetDefinition& preset, const PresetRuntime& rt) {
   session_just_finished = false;
-  dashboard_view = DASH_BOTH;
+  dashboard_view = DASH_LEFT;
   session_name = preset.name;
   session_type = preset.type;
   session_amp_l_mA = rt.amp_l_mA;
@@ -772,20 +784,64 @@ static void drawEditor() {
   oledSendBuffer();
 }
 
+static void formatSessionParamsLine(char* buf, size_t len,
+                                    const PresetDefinition& p, const PresetRuntime& rt) {
+  if (p.type == PresetType::SIN) {
+    if (p.channels_both) {
+      snprintf(buf, len, "%.0f/%.0fHz %.1f/%.1fmA",
+               rt.freq_l_hz, rt.freq_r_hz, rt.amp_l_mA, rt.amp_r_mA);
+    } else {
+      snprintf(buf, len, "%.0fHz %.1fmA", rt.freq_l_hz, rt.amp_l_mA);
+    }
+  } else if (p.channels_both) {
+    snprintf(buf, len, "L%.1f/R%.1fmA", rt.amp_l_mA, rt.amp_r_mA);
+  } else {
+    snprintf(buf, len, "%.1fmA", rt.amp_l_mA);
+  }
+}
+
+static void drawPreStart() {
+  if (active_preset_idx < 0 || active_preset_idx >= (int)g_presets.size()) return;
+  const PresetDefinition& p = g_presets[active_preset_idx];
+  const PresetRuntime& rt = runtimeForPreset(active_preset_idx);
+
+  oled.clearBuffer();
+  oled.setFont(u8g2_font_6x12_t_cyrillic);
+  oled.drawUTF8(0, 0, "НАЧАТЬ СЕАНС");
+  char line[40];
+  formatSessionParamsLine(line, sizeof(line), p, rt);
+  oled.drawUTF8(0, 13, line);
+  snprintf(line, sizeof(line), "%.0f мин", rt.duration_min);
+  oled.drawUTF8(0, 25, line);
+  oled.drawUTF8(0, 37, "*подключите электроды*");
+  oled.drawUTF8(0, 52, "> старт");
+  oledSendBuffer();
+}
+
 static void drawFinish() {
   oled.clearBuffer();
-  oled.setFont(u8g2_font_7x13_t_cyrillic);
-  oled.drawUTF8(0, 0, "СЕАНС ЗАВЕРШЕН");
   oled.setFont(u8g2_font_6x12_t_cyrillic);
+  oled.drawUTF8(0, 0, "СЕАНС ЗАВЕРШЕН");
   char line[40];
-  snprintf(line, sizeof(line), "%s L%.1f/R%.1fmA", session_name.c_str(),
-           session_amp_l_mA, session_channels_both ? session_amp_r_mA : 0.0f);
-  oled.drawUTF8(0, 22, line);
+  if (session_type == PresetType::SIN) {
+    if (session_channels_both) {
+      snprintf(line, sizeof(line), "%.0f/%.0fHz %.1f/%.1fmA",
+               session_freq_l_hz, session_freq_r_hz, session_amp_l_mA, session_amp_r_mA);
+    } else {
+      snprintf(line, sizeof(line), "%.0fHz %.1fmA", session_freq_l_hz, session_amp_l_mA);
+    }
+  } else if (session_channels_both) {
+    snprintf(line, sizeof(line), "L%.1f/R%.1fmA", session_amp_l_mA, session_amp_r_mA);
+  } else {
+    snprintf(line, sizeof(line), "%.1fmA", session_amp_l_mA);
+  }
+  oled.drawUTF8(0, 13, line);
   uint32_t mins = session_elapsed_sec / 60;
   uint32_t secs = session_elapsed_sec % 60;
   snprintf(line, sizeof(line), "%u:%02u", (unsigned)mins, (unsigned)secs);
-  oled.drawStr(0, 38, line);
-  oled.drawUTF8(0, 54, "> меню");
+  oled.drawUTF8(0, 25, line);
+  oled.drawUTF8(0, 37, "*отсоедините электроды*");
+  oled.drawUTF8(0, 52, "> меню");
   oledSendBuffer();
 }
 
@@ -933,6 +989,9 @@ static void drawCurrentScreen() {
     case SCR_FINISH:
       drawFinish();
       break;
+    case SCR_PRE_START:
+      drawPreStart();
+      break;
     case SCR_ERROR:
       drawError();
       break;
@@ -964,7 +1023,9 @@ static void executePresetMenu() {
   if (menu_selected >= (uint8_t)cnt) return;
   const PresetMenuEntry& e = entries[menu_selected];
   switch (e.kind) {
-    case PMI_START: if (guardSessionStart()) startSession(p, rt); break;
+    case PMI_START:
+      if (guardSessionStart()) pushScreen(SCR_PRE_START);
+      break;
     case PMI_BACK:  popScreen(); break;
     case PMI_PARAM: openEditor(e.editor_title, e.value, e.min_v, e.max_v, e.step, e.as_int); break;
   }
@@ -980,6 +1041,7 @@ static int maxMenuIndexForScreen(ScreenType scr) {
   if (scr == SCR_CALIB_MENU) return 6;
   if (scr == SCR_CONFIRM) return 1;
   if (scr == SCR_FINISH) return 0;
+  if (scr == SCR_PRE_START) return 0;
   if (scr == SCR_ERROR) return 0;
   if (scr == SCR_EDITOR || scr == SCR_DASHBOARD) return 0;
 
@@ -1087,6 +1149,11 @@ static void handleClick() {
       break;
     case SCR_FINISH:
       resetToScreen(SCR_MAIN_MENU);
+      break;
+    case SCR_PRE_START:
+      if (active_preset_idx >= 0 && active_preset_idx < (int)g_presets.size()) {
+        startSession(g_presets[active_preset_idx], runtimeForPreset(active_preset_idx));
+      }
       break;
     case SCR_ERROR:
       popScreen();
@@ -1203,7 +1270,7 @@ static void init_enc() {
 void setup() {
   BootControl::init();   // снять GPIO hold если остался с прошлой сессии UF2
 
-  // EN_WAKEUP: LDO PCM5102A (цифра+аналог) + биполярный тракт; HIGH только на сеанс.
+  // EN_WAKEUP: управляется syncEnWakeup() — HIGH на PRE_START / сеанс / FINISH.
   pinMode(EN_WAKEUP, OUTPUT);
   digitalWrite(EN_WAKEUP, LOW);
 

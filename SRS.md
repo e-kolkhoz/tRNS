@@ -468,28 +468,40 @@
   держится на том, что program задаётся строго до `start()`. Инвариант надо задокументировать, чтобы
   будущая «смена частоты на лету» не породила артефакты в приоритетном тракте DAC.
 
-### R.13 Lifecycle PCM5102A / I2S / EN_WAKEUP (критично, не ломать)
+### R.13 Lifecycle DAC / I2S (упрощён)
 
-**Контекст (аппарат с 2026-07).** Цифровое и аналоговое питание PCM5102A на LDO с `EN_WAKEUP`.
-`EN_WAKEUP=LOW` — DAC полностью обесточен; вне сеанса I2S не поднимается. Подробности — `PROBLEMS.md` §3.
+**Контекст.** `EN_WAKEUP` управляется из UI (`syncEnWakeup()` в `.ino`), не из `DacControl`.
+I2S/`playerTask` — только на время активного воспроизведения (старт сеанса…`stop()`).
+Паразит ~0,1 мА при `EN_WAKEUP=LOW` и подключённых электродах — аппаратный путь VCCS;
+софтом (нули I2S и т.п.) не убирается → см. **R.15**.
 
-**Таблица состояний** (`DacControl`, `dac_control.cpp`):
+**`DacControl` (`dac_control.cpp`):**
+1. `init()` — сброс состояния, без I2S.
+2. `start()` — `i2s_start`, create `playerTask`, `s_playing=true`.
+3. `stop()` — `s_playing=false`, `i2s_stop`, `vTaskDelete` задачи. **Без** `EN_WAKEUP`.
 
-| Состояние | I2S | `playerTask` | `EN_WAKEUP` |
-|---|---|---|---|
-| Меню, после `stop()`, reboot | выкл | suspend | LOW |
-| Сеанс | тактует | waveform × `gain` | HIGH |
-| Deep sleep | MCU спит | — | LOW |
+**Связанные документы:** `PROBLEMS.md` §3, R.15, `config.h`.
 
-**Требования:**
-1. `setup()` — `EN_WAKEUP=LOW`.
-2. `init()` — сброс состояния, без I2S.
-3. `start()` — `i2s_start`, `EN_WAKEUP=HIGH`, create/resume `playerTask`, `s_playing=true`.
-4. `stop()` — после fade до 0: `EN_WAKEUP=LOW`, suspend task, `i2s_stop`. **Запрещено:**
-   `releaseDriver`, `parkI2sPins`, `writeSilenceBlocks` при работающей задаче.
-5. I2S L/R: `RIGHT_LEFT` + своп в `playerTask` (см. R.13 п.4 в истории коммитов).
+### R.15 EN_WAKEUP и экраны подключения электродов
 
-**Связанные документы:** `PROBLEMS.md` §3, `POWER_CONTROL.md`, `config.h`.
+**Наблюдение.** `EN_WAKEUP=LOW` снимает DC-DC/DAC, но батарея питает VCCS через дроссель;
+при подключённых электродах — ~**0,1 мА** (безопасно, но лишнее).
+
+**Решение — процедура, не I2S-магия:**
+- Электроды подключать **на `SCR_PRE_START`** (`*подключите электроды*`, `> старт`).
+- Отключать **на `SCR_FINISH`** (`*отсоедините электроды*`, `> меню`).
+
+**`EN_WAKEUP=HIGH` только когда:**
+| Экран / состояние |
+|---|
+| `SCR_PRE_START` |
+| `SCR_DASHBOARD` (активный сеанс) |
+| `SCR_CONFIRM` (остановка сеанса) |
+| `SCR_FINISH` |
+
+**`EN_WAKEUP=LOW`:** меню, настройки, boot, deep sleep, после «> меню» на finish.
+
+**Дашборд по умолчанию:** вид **L** (не BOTH).
 
 ### R.14 OLED I2C: переподключение после обрыва связи
 
@@ -519,4 +531,5 @@
 6. Инвариант-комментарий (R.12).
 7. Lifecycle PCM5102 / I2S / EN_WAKEUP (R.13) — не регрессировать.
 8. OLED I2C reconnect (R.14).
+9. EN_WAKEUP + SCR_PRE_START / SCR_FINISH (R.15).
 

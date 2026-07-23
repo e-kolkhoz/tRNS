@@ -18,34 +18,20 @@
 
 **Решение:** никаких режимов. `setup()` ждёт ~1.5 сек (OTG отходит), потом вручную `USB.begin()` + `USBMSC.begin()` — и диск виден всегда, при любом подключении к ПК. Чтение файлов с FFat делается **до** MSC-монтирования, один раз в `setup()`. В версии с аккумулятором просто не будем отдавать файл контроллеру, пока USB подключён к хосту — это решается на уровне логики, а не USB-стека.
 
-## 3. PCM5102A + I2S + EN_WAKEUP — lifecycle (НЕ ЛОМАТЬ)
+## 3. EN_WAKEUP, паразитный ток и lifecycle DAC
 
-**Аппарат (с 2026-07):** цифровое и аналоговое питание PCM5102A на одном LDO с `EN_WAKEUP`.
-`EN_WAKEUP=LOW` — DAC **полностью обесточен**; I2S в idle не нужен.
+**Наблюдение (2026-07).** `EN_WAKEUP=LOW` отключает DC-DC/DAC, но батарея продолжает питать VCCS через дроссель.
+При **уже подключённых** электродах — ~0,1 мА (безопасно, но лишнее).
 
-**Симптомы при нарушении (старая топология / releaseDriver):**
-- постоянный/скачущий потенциал на электродах;
-- скачок тока после fade до нуля;
-- зависание в `start()` (deadlock `i2s_write`).
+**Что не помогает:** вечный I2S с нулями, XSMT, suspend/resume задачи — это про поведение PCM5102
+при обрыве тактов, **не** про паразит через VCCS при выключенном `EN_WAKEUP`.
 
-### Таблица состояний (`dac_control.cpp`)
+**Решение (R.15):**
+- `EN_WAKEUP=HIGH` на `SCR_PRE_START`, сеансе, `SCR_FINISH`.
+- Пользователь подключает электроды на PRE_START, отключает на FINISH.
+- `syncEnWakeup()` в `.ino`; `DacControl` не трогает `EN_WAKEUP`.
 
-| Состояние | I2S | `playerTask` | `EN_WAKEUP` |
-|---|---|---|---|
-| Меню / после `stop()` / reboot | **выкл** | suspend | **LOW** |
-| Сеанс | **да** | waveform × `gain` | **HIGH** |
-| Deep sleep | MCU спит | — | **LOW** |
+**I2S (`dac_control.cpp`):** поднимается на `start()` сеанса, гасится на `stop()` после fade до 0.
+**Запрещено:** `releaseDriver`, `parkI2sPins` — скачок на электродах.
 
-**Инварианты:**
-1. **`setup()`** — `EN_WAKEUP=LOW`.
-2. **`init()`** — только сброс состояния; **без** I2S.
-3. **`start()`** — `i2s_start`, `EN_WAKEUP=HIGH`, `playerTask` create/resume, `s_playing=true`.
-4. **`stop()`** — fade уже до 0 → `s_playing=false`, `EN_WAKEUP=LOW`, `vTaskSuspend`, `i2s_stop`.
-   **Запрещено:** `releaseDriver`, `parkI2sPins`, `writeSilenceBlocks` при работающей задаче.
-5. **Каналы I2S:** `RIGHT_LEFT` + своп L/R в `playerTask` (см. TODO #7).
-
-**Исторически отвергнуто** (до переноса PCM5102 на LDO): вечный I2S с нулями при `EN_WAKEUP=LOW`
-(PCM5102 оставался под питанием без тактов → мусор на выходе).
-
-**Реализация:** `ESP32tRNS/dac_control.cpp`; `POWER_CONTROL.md`, `config.h`.
-
+**Реализация:** `ESP32tRNS.ino`, `dac_control.cpp`, `SRS.md` R.13/R.15.

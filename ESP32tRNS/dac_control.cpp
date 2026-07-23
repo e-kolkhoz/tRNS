@@ -203,24 +203,12 @@ static bool ensureDriver() {
     return true;
 }
 
-static void writeSilenceBlocks(i2s_port_t port, int n_blocks) {
-    int16_t silence[256 * 2];
-    memset(silence, 0, sizeof(silence));
-    for (int i = 0; i < n_blocks; i++) {
-        size_t written = 0;
-        i2s_write(port, silence, sizeof(silence), &written, portMAX_DELAY);
-    }
-}
-
 }  // namespace
 
 // ИНВАРИАНТ (см. SRS R.12): во время playing параметры программы (g_program/g_wave/
-// sample_rate) НЕ меняются. Меняется только g_gain (fade in/out) — это обёртка при
-// заполнении буфера DAC, а не изменение параметров пресета. Поэтому playerTask читает
-// общий g_wave на другом ядре без блокировок безопасно: setProgram/setCustomWaveStereo
-// вызываются строго до start() и после stop().
-// PCM5102 без тактов выдаёт мусор на выходе — I2S всегда тактует нули вне сеанса.
-// releaseDriver/parkI2sPins/i2s_stop в stop() запрещены (скачок после fade).
+// sample_rate) НЕ меняются. Меняется только g_gain (fade in/out).
+// PCM5102A (цифра + аналог) на LDO с EN_WAKEUP — вне сеанса питание DAC снято,
+// I2S/playerTask поднимаются только на время сеанса.
 void DacControl::playerTask(void* arg) {
     (void)arg;
     size_t k = 0;
@@ -257,15 +245,6 @@ void DacControl::init() {
     g_wave[0] = 0;
     g_wave[1] = 0;
     s_playing = false;
-
-    if (!ensureDriver()) return;
-    i2s_zero_dma_buffer(s_i2s_port);
-    i2s_start(s_i2s_port);
-    writeSilenceBlocks(s_i2s_port, 4);
-
-    if (s_task == nullptr) {
-        xTaskCreatePinnedToCore(playerTask, "dac_sin", 3072, NULL, 6, &s_task, 1);
-    }
 }
 
 void DacControl::setProgram(const DacProgram& program) {
@@ -315,17 +294,17 @@ void DacControl::start() {
 
     const uint32_t fs = (g_program.sample_rate_hz > 0)
         ? (uint32_t)g_program.sample_rate_hz : (uint32_t)DAC_SAMPLE_RATE;
+    digitalWrite(EN_WAKEUP, HIGH);
     i2s_set_clk(s_i2s_port, fs, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_STEREO);
     i2s_zero_dma_buffer(s_i2s_port);
     i2s_start(s_i2s_port);
 
-    // Задача уже крутится с init(); writeSilenceBlocks здесь = deadlock на i2s_write.
     if (s_task == nullptr) {
-        writeSilenceBlocks(s_i2s_port, 4);
         xTaskCreatePinnedToCore(playerTask, "dac_sin", 3072, NULL, 6, &s_task, 1);
+    } else {
+        vTaskResume(s_task);
     }
 
-    digitalWrite(EN_WAKEUP, HIGH);
     s_playing = true;
 }
 
@@ -337,5 +316,7 @@ void DacControl::stop() {
     g_wave_len = 1;
     g_wave[0] = 0;
     g_wave[1] = 0;
-    // digitalWrite(EN_WAKEUP, LOW);  // GPIO17 = EN_WAKEUP + PCM5102A XSMT: эксперимент — не гасим
+    digitalWrite(EN_WAKEUP, LOW);
+    if (s_task) vTaskSuspend(s_task);
+    if (s_driver_installed) i2s_stop(s_i2s_port);
 }

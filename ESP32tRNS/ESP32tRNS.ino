@@ -5,7 +5,7 @@
 // Цикл загрузки:
 //   1. PresetDsl::scanAll() — FFat, список валидных YAML-пресетов (+ errors.log).
 //   2. USBFlash::mount() — USB MSC, раздел как флешка на ПК.
-//   3. После успешного mount — I2C OLED + энкодер.
+//   3. OLED — splash «== ГРУЗИМСЯ ==» сразу после I2C; меню после mount; reconnect — R.14/SRS.
 //
 // Neopixel:
 //   синий пульс — жив
@@ -112,6 +112,9 @@ static constexpr uint8_t MENU_MAX_PRESETS = 12; // максимум пресет
 static constexpr uint8_t PRESET_MENU_MAX_ITEMS = 11;
 
 static UiSettings ui;
+
+static bool g_oled_ok = false;
+static constexpr uint32_t OLED_PROBE_MS = 500;
 static std::vector<PresetRuntime> g_runtime;
 static EditorData editor;
 static float editor_temp = 0.0f;
@@ -554,7 +557,7 @@ static void renderMenu(const char* title, const char* choices[], uint8_t count) 
     if (scroll > 0) oled.drawTriangle(124, 14, 120, 18, 128, 18);
     if (scroll < count - max_vis) oled.drawTriangle(124, 62, 120, 58, 128, 58);
   }
-  oled.sendBuffer();
+  oledSendBuffer();
 }
 
 // --- Осциллограф дашборда (R.6/R.8) ---
@@ -697,7 +700,7 @@ static void drawDashboard() {
     float progress = (total > 0.0f) ? (float)elapsed / total : 0.0f;
     if (progress > 1.0f) progress = 1.0f;
     oled.drawHLine(0, 63, (int)(progress * 128));
-    oled.sendBuffer();
+    oledSendBuffer();
     return;
   }
 
@@ -719,7 +722,7 @@ static void drawDashboard() {
   drawScopeChannel(left);
   snprintf(metric, sizeof(metric), "%.1fmA", left ? fb_l : fb_r);
   drawMeterAndProgress(metric);
-  oled.sendBuffer();
+  oledSendBuffer();
 }
 
 static void drawConfirm() {
@@ -749,7 +752,7 @@ static void drawConfirm() {
     snprintf(yes2, sizeof(yes2), "> %s", yes_lbl);
     oled.drawUTF8(0, 38, yes2);
   }
-  oled.sendBuffer();
+  oledSendBuffer();
 }
 
 static void drawEditor() {
@@ -766,7 +769,7 @@ static void drawEditor() {
   oled.drawStr(30, 24, v);
   oled.setFont(u8g2_font_6x12_t_cyrillic);
   oled.drawUTF8(0, 52, "> сохранить");
-  oled.sendBuffer();
+  oledSendBuffer();
 }
 
 static void drawFinish() {
@@ -783,7 +786,7 @@ static void drawFinish() {
   snprintf(line, sizeof(line), "%u:%02u", (unsigned)mins, (unsigned)secs);
   oled.drawStr(0, 38, line);
   oled.drawUTF8(0, 54, "> меню");
-  oled.sendBuffer();
+  oledSendBuffer();
 }
 
 static void drawError() {
@@ -793,7 +796,7 @@ static void drawError() {
   oled.setFont(u8g2_font_6x12_t_cyrillic);
   oled.drawUTF8(0, 26, g_error_msg);
   oled.drawUTF8(0, 50, "> назад");
-  oled.sendBuffer();
+  oledSendBuffer();
 }
 
 // Заполняет декларативный список пунктов пресет-меню (R.10).
@@ -1093,7 +1096,7 @@ static void handleClick() {
 
 // --- Глубокий сон, пробуждение по нажатию ENC_S ---
 static void go_sleep() {
-  // digitalWrite(EN_WAKEUP, LOW);  // GPIO17 = EN_WAKEUP + PCM5102A XSMT: эксперимент — не гасим
+  digitalWrite(EN_WAKEUP, LOW);
   rgbLedWrite(NEOPIXEL_PIN, 0, 0, 0);     // гасим неопиксель
   oled.setPowerSave(1);                    // гасим экран
   // Ждём пока кнопка точно отпущена
@@ -1134,17 +1137,57 @@ void IRAM_ATTR enc_isr() {
   enc.tickISR();
 }
 
-static void init_enc_oled() {
+static bool oledProbe() {
+  Wire.beginTransmission(DISPLAY_ADDR);
+  return Wire.endTransmission() == 0;
+}
+
+static void oledInit() {
+  Wire.end();
   Wire.begin(OLED_SDA, OLED_SCL);
   Wire.setClock(OLED_I2C_HZ);
-  AdcControl::init();
+  Wire.setTimeOut(50);
   oled.setI2CAddress(DISPLAY_ADDR << 1);
   oled.begin();
   oled.enableUTF8Print();
   oled.setFontPosTop();
   oled.setContrast(255);
   oled.setPowerSave(0);
+  g_oled_ok = oledProbe();
+}
 
+static void oledSendBuffer() {
+  if (g_oled_ok) oled.sendBuffer();
+}
+
+// Периодическая проверка I2C; при восстановлении связи — повторный oledInit().
+// Возвращает true, если экран доступен; *reconnected=1 после успешного reinit.
+static bool oledPollConnection(uint8_t* reconnected) {
+  if (reconnected) *reconnected = 0;
+  if (oledProbe()) {
+    if (!g_oled_ok) {
+      oledInit();
+      if (g_oled_ok && reconnected) *reconnected = 1;
+    }
+    return g_oled_ok;
+  }
+  g_oled_ok = false;
+  return false;
+}
+
+static void drawBootSplash() {
+  static const char msg[] = "== ГРУЗИМСЯ ==";
+  oled.clearBuffer();
+  oled.setFont(u8g2_font_6x12_t_cyrillic);
+  const int w = oled.getUTF8Width(msg);
+  const int w_ver = oled.getUTF8Width(FIRMWARE_VERSION);
+  oled.drawUTF8((128 - w) / 2, (64 - 12) / 2, msg);
+  oled.drawUTF8((128 - w_ver) / 2, 52, FIRMWARE_VERSION);
+  oledSendBuffer();
+}
+
+static void init_enc() {
+  AdcControl::init();
   enc.setEncType(EB_STEP4_LOW);
   enc.setDebTimeout(120); // 120ms debounce — защита от дребезга механического энкодера
   enc.setEncReverse(true);
@@ -1154,22 +1197,22 @@ static void init_enc_oled() {
   attachInterrupt(digitalPinToInterrupt(ENC_A), enc_isr, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENC_B), enc_isr, CHANGE);
   enc.setEncReverse(ui.enc_reverse);
-
-  drawCurrentScreen();
 }
 
 // ============================================================
 void setup() {
   BootControl::init();   // снять GPIO hold если остался с прошлой сессии UF2
 
-  // GPIO17 = EN_WAKEUP (биполярник) + PCM5102A XSMT (SOFT MUTE), общая линия.
-  // Эксперимент: не гасим — иначе XSMT mute ломает нулевой поток после stop.
+  // EN_WAKEUP: LDO PCM5102A (цифра+аналог) + биполярный тракт; HIGH только на сеанс.
   pinMode(EN_WAKEUP, OUTPUT);
-  // digitalWrite(EN_WAKEUP, LOW);
-  digitalWrite(EN_WAKEUP, HIGH);
+  digitalWrite(EN_WAKEUP, LOW);
 
   pinMode(USB_DET, INPUT);
   pinMode(CHRG_PIN, INPUT_PULLUP);
+
+  oledInit();
+  drawBootSplash();
+
   analogSetAttenuation(ADC_11db);
   g_pref.begin("preset_rt", false);
   loadCalibration();
@@ -1196,8 +1239,8 @@ void setup() {
     rgbLedWrite(NEOPIXEL_PIN, 40, 25, 0);
   }
 
-  init_enc_oled();
-  
+  init_enc();
+  drawCurrentScreen();
 }
 
 void loop() {
@@ -1232,9 +1275,17 @@ void loop() {
     ch = true;
   }
 
+  static uint32_t t_oled_probe = 0;
+  const uint32_t now = millis();
+  if (t_oled_probe == 0 || now - t_oled_probe >= OLED_PROBE_MS) {
+    t_oled_probe = now;
+    uint8_t reconnected = 0;
+    if (oledPollConnection(&reconnected) && reconnected) ch = true;
+  }
+
   static uint32_t t_draw;
-  if (ch || millis() - t_draw > 200) {
-    t_draw = millis();
+  if ((ch || now - t_draw > 200) && g_oled_ok) {
+    t_draw = now;
     drawCurrentScreen();
   }
 

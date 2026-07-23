@@ -1,7 +1,7 @@
-# Низкочастотный nGVS на базе WAV
-# Гауссовский шум, квазибелый в диапазоне 1-100 Гц симметричный униполярный
+# Высокочастотный tRNS 100-640 на базе WAV
+# Гауссовский шум, квазибелый в дипапазоне 100-640 Гц симметричный униполярный
 dsl_version: 1
-name: "nGVS-lf"
+name: "hf-tRNS"
 type: "WAV"
 
 channels:
@@ -14,10 +14,11 @@ feedback:
   amp_estimation_coeff: 3.0
 
 scope:
-  # Для длинного WAV-лупа синхронизация не всегда нужна
-  sync_mode: "no_sync"
+  # Для WAV обычно один период лупа
+  sync_mode: "one_period"
 
-wave_file: "ngvs-lf.wav"
+# WAV должен лежать рядом на флешке
+wave_file: "hf-tRNS.wav"
 
 params:
   # menu_label: "Амплитуда, мА"

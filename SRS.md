@@ -470,38 +470,45 @@
 
 ### R.13 Lifecycle PCM5102A / I2S / EN_WAKEUP (критично, не ломать)
 
-**Контекст.** PCM5102A на аналоговом выходе ведёт себя предсказуемо **только** при непрерывном
-валидном I2S-потоке. `EN_WAKEUP` включает **биполярное питание** аналогового тракта (VCCS и т.п.),
-но **не отключает** DAC с шины — обрыв тактов или «парковка» линий I2S в LOW даёт мусор/скачок на
-электродах. Подробные грабли и отвергнутые патчи — `PROBLEMS.md`, §3.
+**Контекст (аппарат с 2026-07).** Цифровое и аналоговое питание PCM5102A на LDO с `EN_WAKEUP`.
+`EN_WAKEUP=LOW` — DAC полностью обесточен; вне сеанса I2S не поднимается. Подробности — `PROBLEMS.md` §3.
 
-**Обязательная таблица состояний** (`DacControl`, `dac_control.cpp`):
+**Таблица состояний** (`DacControl`, `dac_control.cpp`):
 
-| Состояние | I2S | `playerTask` | `EN_WAKEUP` | Назначение |
-|---|---|---|---|---|
-| Меню, после `stop()`, reboot→idle | тактует | стерео-нули | LOW | PCM5102 в валидном нуле, биполярник выкл. |
-| Сеанс | тактует | waveform × `gain` | HIGH | стимуляция |
-| Deep sleep (`go_sleep`) | MCU спит | — | LOW | только `digitalWrite`; без `releaseDriver` при надетых электродах |
+| Состояние | I2S | `playerTask` | `EN_WAKEUP` |
+|---|---|---|---|
+| Меню, после `stop()`, reboot | выкл | suspend | LOW |
+| Сеанс | тактует | waveform × `gain` | HIGH |
+| Deep sleep | MCU спит | — | LOW |
 
-**Требования к реализации (приоритет безопасности):**
-1. `init()` — `ensureDriver` → `i2s_start` → `writeSilenceBlocks` → вечная `playerTask` (нули);
-   `setup()` до этого выставляет `EN_WAKEUP=LOW`.
-2. `start()` — `i2s_set_clk(fs)`, `EN_WAKEUP=HIGH`, `s_playing=true`; **не** вызывать
-   `writeSilenceBlocks`, если задача уже запущена (взаимная блокировка `i2s_write`).
-3. `stop()` — `s_playing=false`, `gain=0`, idle wave, `EN_WAKEUP=LOW`; задача **не** останавливается,
-   I2S **не** останавливается. **Запрещено в обычном stop:** `i2s_stop`, `i2s_driver_uninstall`,
-   `parkI2sPins`, убийство/суспенд `playerTask`.
-4. I2S-каналы: `I2S_CHANNEL_FMT_RIGHT_LEFT`; в `playerTask` — `buf[0]=ch_r`, `buf[1]=ch_l`
-   (`g_wave[0]` = L). Константы `I2S_CHANNEL_FMT_LEFT_RIGHT` в legacy I2S ESP32 **нет** — своп только в буфере.
-5. Fade-out до `gain=0` перед `stop()` — единственный штатный путь снижения тока; `stop()` не должен
-   обрывать такты сразу после нулевого fade.
+**Требования:**
+1. `setup()` — `EN_WAKEUP=LOW`.
+2. `init()` — сброс состояния, без I2S.
+3. `start()` — `i2s_start`, `EN_WAKEUP=HIGH`, create/resume `playerTask`, `s_playing=true`.
+4. `stop()` — после fade до 0: `EN_WAKEUP=LOW`, suspend task, `i2s_stop`. **Запрещено:**
+   `releaseDriver`, `parkI2sPins`, `writeSilenceBlocks` при работающей задаче.
+5. I2S L/R: `RIGHT_LEFT` + своп в `playerTask` (см. R.13 п.4 в истории коммитов).
 
-**Нефункциональное следствие:** в idle при `EN_WAKEUP=LOW` и нулевом I2S возможна небольшая утечка
-на электродах (~0.15–0.17 мА) — это **меньшее зло**, чем отключённый I2S (постоянный потенциал от
-PCM5102). Уменьшение утечки — только аппаратно или отдельным согласованным изменением, **не** через
-`releaseDriver` в `stop()`.
+**Связанные документы:** `PROBLEMS.md` §3, `POWER_CONTROL.md`, `config.h`.
 
-**Связанные документы:** `PROBLEMS.md` §3, `POWER_CONTROL.md`, `config.h` (`EN_WAKEUP`, I2S-пины).
+### R.14 OLED I2C: переподключение после обрыва связи
+
+**Контекст.** OLED (SSD1306/SH1106) на I2C может временно пропасть с шины (разъём, перезагрузка
+дисплея при живом ESP). Инициализация только в `setup()` не восстанавливает картинку после возврата.
+
+**Решение** (`ESP32tRNS.ino`):
+1. **`oledInit()`** — единая точка инициализации: `Wire.end()` → `Wire.begin()` → `Wire.setTimeOut(50)`
+   → `oled.begin()` + contrast/UTF8; флаг `g_oled_ok` по результату `oledProbe()`.
+2. **`oledProbe()`** — `Wire.beginTransmission(DISPLAY_ADDR)` + `endTransmission() == 0`.
+3. **`oledPollConnection()`** — в `loop()` каждые **500 мс**; при переходе «нет → есть» — повторный
+   `oledInit()` и принудительный redraw текущего экрана.
+4. **`oledSendBuffer()`** — вывод буфера только при `g_oled_ok` (U8g2 не сообщает об ошибке I2C).
+5. **Boot splash** — `drawBootSplash()` сразу после первого `oledInit()` в `setup()` (до mount/меню).
+
+**Ограничения.** Залипшая линия SDA (КЗ, аппаратный сбой) софтом не лечится; `setTimeOut` лишь не даёт
+зависнуть `loop`. На шине только OLED — `Wire.end()` безопасен.
+
+**Причина.** Живучесть UX при ненадёжном FPC/разъёме; ранний splash при boot (см. п.5).
 
 ### Порядок реализации
 1. Документация: R.1, R.7 (этот файл) — готово.
@@ -511,4 +518,5 @@ PCM5102). Уменьшение утечки — только аппаратно 
 5. Осциллограф + показометр (R.6, R.8).
 6. Инвариант-комментарий (R.12).
 7. Lifecycle PCM5102 / I2S / EN_WAKEUP (R.13) — не регрессировать.
+8. OLED I2C reconnect (R.14).
 

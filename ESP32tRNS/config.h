@@ -15,7 +15,7 @@
 #define PLUS_BAT_ADC  6   // аналоговый вход с делителя 360k/100k батарейки 3.7V
 #define MIN_BATTERY_START_PCT  40   // ниже — запрет старта сеанса (TODO #3)
 #define CHRG_PIN      7   // TP4054 CHRG (open drain): к GND пока идёт заряд; hi-Z когда нет. К ESP через R или напрямую; INPUT_PULLUP
-#define EN_WAKEUP     17  // выход вкл. аналоговые модули
+#define EN_WAKEUP     17  // LDO PCM5102A + биполярник; LOW=idle/sleep, HIGH=сеанс
 #define USB_DET       21  // вход детектор VBUS c USB c делителя 51k/100k
 
 // --- DAC I2S → PCM5102A (стерео DAC) ---

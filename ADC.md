@@ -1,7 +1,7 @@
 Обратная связь токовая, униполярная.
 Стартовые DEF-калибровки для atten=11dB:
-- offset L = 1.18 V
-- offset R = 1.18 V
+- offset L = 1.25 V
+- offset R = 1.25 V
 - коэффициент пересчета V->mA = 0.37
 ADC_SENSE1 GPIO4 LEFT  (ADC1_CH3)
 ADC_SENSE2 GPIO5 RIGHT (ADC1_CH4)

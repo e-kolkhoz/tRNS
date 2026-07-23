@@ -14,10 +14,8 @@ channels:
   mode: "left"
 
 feedback:
-  # Итоговая оценка амплитуды: base_value * amp_estimation_coeff
-  amp_estimation_base: "STD"
-  # Для синуса: A = sqrt(2) * STD
-  amp_estimation_coeff: 1.414
+  # Для SIN: coeff = sqrt(2) подставляется при загрузке пресета
+  amp_estimation_base: "AUTO_RMS"
 
 scope:
   # Для SIN: two_periods | no_sync

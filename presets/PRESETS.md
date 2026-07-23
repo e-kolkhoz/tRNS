@@ -1,36 +1,35 @@
-# Пресеты `tRNS` (DSL v1)
+# Пресеты `tRNS` (tES-DSL v1)
 
 Эта папка — рабочая "библиотека" пресетов для устройства.  
-Вы редактируете YAML, копируете YAML/WAV на флешку, прошивка загружает только валидные файлы.
 
-## 1) Какие типы пресетов есть сейчас
+Этим файликом лучше пользоваться как справочником, можно интуитивно на готовых примерах создавать свои пресеты, а если что-то пошло не так, то в файле `errors.log` будет написано, в чем ошибка.
 
-Пока поддерживаются только три типа:
+**Практический цикл работы**
 
-- `CONST` — постоянный ток (`tDCS`).
+1. Редактируем YAML (и создаем луп *.wav если нужен тип WAV).
+2. Копируем YAML или YAML+*.wav на флешку.
+3. Перезапускаем устройство.
+4. Проверяем список пресетов и `errors.log`.
+5. Правим YAML и повторяем.
+
+## 1) Какие типы пресетов есть
+
+В `tES-DSL v1` поддерживаются только три типа:
+
+- `CONST` — постоянный ток (`tDCS`- одноканальный, `tDCS-2a`- два независимых анода).
 - `SIN` — параметрический синус (`tACS`).
-- `WAV` — сигнал из WAV-файла (`tRNS-hf`, `nGVS-lf`).
-
-Других типов в `v1` пока нет.
+- `WAV` — сигнал из WAV-файла (`hf-tRNS`- tRNS 100-640Гц нормальное распределение, `lf-nGVS` тоже гауссовский, квазибелый в диапазоне 1-100Гц).
 
 ## 2) Файлы в этой папке
 
 - `*.yaml` — описание пресета (DSL).
 - `*.wav` — данные сигнала для пресетов типа `WAV`.
 
-Эталонные YAML:
-
-- `tdcs.yaml`
-- `tdcs-2a.yaml`
-- `tacs.yaml`
-- `trns-hf.yaml`
-- `ngvs-lf.yaml`
-
 ## 3) Правила имен файлов
 
 - Имя YAML-файла: только ASCII и шаблон `[a-z0-9_-]+`.
 - Длина имени (без пути): не более `64` символов.
-- Нарушение правила => пресет отбраковывается.
+- Нарушение правила => пресет отбраковывается (см. `errors.log`).
 
 ## 4) Общие обязательные поля (для любого типа)
 
@@ -40,11 +39,11 @@
 - `name`
 - `type` (`CONST` | `SIN` | `WAV`)
 - `channels.mode` (`left` | `both`)
-- `feedback.amp_estimation_base` (`MEAN` | `STD`)
-- `feedback.amp_estimation_coeff` (число `> 0`)
+- `feedback.amp_estimation_base` (`MEAN` | `RMS` | `AUTO_RMS`)
+- `feedback.amp_estimation_coeff` (число `> 0`) — **обязателен** для `MEAN`/`RMS`, **запрещён** для `AUTO_RMS`
 - `params`
 
-Если обязательного поля нет, пресет невалиден.
+Если обязательного поля нет, пресет невалиден (см. `errors.log`).
 
 ## 5) Что такое `params`
 
@@ -75,24 +74,50 @@ some_param:
 
 ## 6) Как считается амплитуда в `feedback`
 
-Вводим единый механизм для всех типов:
+### Три режима `amp_estimation_base`
+
+| Режим | Когда | `base_value` | `amp_estimation_coeff` |
+|-------|--------|--------------|-------------------------|
+| **MEAN** | `CONST` (постоянный ток) | `\|mean(Vadc)−Voffset\|` | задаётся в YAML (`1.0`) |
+| **RMS** | AC, coeff известен вручную | `RMS(Vbip)` | задаётся в YAML |
+| **AUTO_RMS** | AC, форма известна из генератора | `RMS(Vbip)` | **crest factor** формы, без YAML |
+
+**Crest factor** (коэффициент пика к RMS) формы сигнала на DAC:
+
+\[
+K = \frac{\max|s(t)|}{\mathrm{RMS}(s(t))}
+\]
+
+После peak-нормализации WAV/SIN на DAC: `I_peak ≈ I_rms · K`.  
+`AUTO_RMS` подставляет `K` автоматически — оценка согласована с тем, что реально воспроизводится.
+
+Разрешение `AUTO_RMS` при загрузке пресетов (`scanAll`):
+
+- **`CONST`** → `MEAN`, `coeff = 1.0` (синоним `MEAN × 1.0`)
+- **`SIN`** → `RMS`, `coeff = 1.414` (`√2`)
+- **`WAV`** → `RMS`, `coeff = K` по **левому** каналу лупа (один проход: peak + sum of squares)
+
+### DSL и формула на экране
 
 ```yaml
+# tDCS — постоянный ток
 feedback:
-  amp_estimation_base: "STD"   # или "MEAN"
-  amp_estimation_coeff: 3.0
+  amp_estimation_base: "MEAN"
+  amp_estimation_coeff: 1.0
+
+# tACS / tRNS / nGVS — авто crest factor
+feedback:
+  amp_estimation_base: "AUTO_RMS"
 ```
 
-Формула:
+- `base_value` — `RMS(Vbip)` в вольтах или `|mean(Vadc)−Voffset|` для MEAN (окно ~1 с).
+- `estimated_mA = base_value · V_TO_MA · amp_estimation_coeff`
 
-- `estimated_amplitude = base_value * amp_estimation_coeff`
-- `base_value` — это результат выбранной базы (`MEAN` или `STD`) на окне анализа.
+Strict-правила:
 
-Типовые значения коэффициента:
-
-- `CONST`: `MEAN * 1.0`
-- `SIN`: `STD * 1.414` (приближенно `sqrt(2)`)
-- `WAV` шумовой (`tRNS`/`nGVS`): `STD * 3.0` (модель `3σ`)
+- `AUTO_RMS` + `amp_estimation_coeff` в YAML → **fatal**
+- `MEAN`/`RMS` без `amp_estimation_coeff` → **fatal**
+- `type: WAV`: левый канал лупа с `peak = 0` или `RMS ≈ 0` → **fatal** (нули только через `CONST`, напр. `tDCS`)
 
 ## 7) Поля по типам пресета
 
@@ -104,8 +129,8 @@ feedback:
 - `sample_rate_hz.value` (фиксированная частота дискретизации параметрического генератора).
 - в `params` обязательно `duration_min`.
 - для `feedback` рекомендуется:
-  - `amp_estimation_base: MEAN`
-  - `amp_estimation_coeff: 1.0`
+  - `amp_estimation_base: MEAN` (или `AUTO_RMS` — то же самое)
+  - `amp_estimation_coeff: 1.0` (только для `MEAN`, не для `AUTO_RMS`)
 
 Не используется:
 
@@ -120,8 +145,7 @@ feedback:
 - `sample_rate_hz.value`;
 - в `params` обязательно `frequency_hz` и `duration_min`.
 - для `feedback` рекомендуется:
-  - `amp_estimation_base: STD`
-  - `amp_estimation_coeff: 1.414`
+  - `amp_estimation_base: AUTO_RMS` (или `RMS` + `amp_estimation_coeff: 1.414`)
 
 Рекомендуется:
 
@@ -139,8 +163,7 @@ feedback:
 - `wave_file` (имя WAV-файла на флешке).
 - в `params` обязательно `duration_min`.
 - для `feedback` рекомендуется:
-  - `amp_estimation_base: STD`
-  - `amp_estimation_coeff: 3.0`
+  - `amp_estimation_base: AUTO_RMS` (crest factor из `wave_file`, левый канал)
 
 Рекомендуется:
 
@@ -191,12 +214,4 @@ name: "tDCS"
 - Значения сохраняются в NVS по ключам вида `preset_file_name + param_name`.
 - Отдельного флага "инициализировано" нет: наличие ключа уже означает инициализацию.
 - `default` из YAML применяется только при первом создании ключа.
-
-## 12) Практический цикл работы
-
-1. Редактируем YAML в этой папке.
-2. Копируем YAML/WAV на флешку.
-3. Перезапускаем устройство.
-4. Проверяем список пресетов и `errors.log`.
-5. Правим YAML и повторяем.
 

@@ -42,12 +42,12 @@
 #define ADC_SENSE2  5    // RIGHT ADC1_CH4
 #define ADC_MOD_ATTEN           ADC_ATTEN_DB_12
 #define ADC_MAX_VOLTAGE         3.3f
-#define DEF_ADC_OFFSET_L_V      1.18f   // V offset для левого канала
-#define DEF_ADC_OFFSET_R_V      1.18f   // V offset для правого канала
+#define DEF_ADC_OFFSET_L_V      1.25f   // V offset для левого канала
+#define DEF_ADC_OFFSET_R_V      1.25f   // V offset для правого канала
 #define CAL_VOFFSET_MIN         0.0f    // диапазон/шаг редактора V offset
 #define CAL_VOFFSET_MAX         3.30f
 #define CAL_VOFFSET_STEP        0.01f
-#define DEF_ADC_V_TO_MA         2.7f   // коэффициент пересчета V -> mA
+#define DEF_ADC_V_TO_MA         3.15f   // коэффициент пересчета V -> mA
 #define CAL_V_TO_MA_MIN         0.0f    // диапазон/шаг редактора V->mA
 #define CAL_V_TO_MA_MAX         10.0f
 #define CAL_V_TO_MA_STEP        0.05f

@@ -583,7 +583,7 @@ static float feedbackForChannel(const AdcChannelStats& st, bool is_left) {
   const float offset_v = is_left ? g_cal_voffset_l : g_cal_voffset_r;
   const float v_to_ma  = is_left ? g_cal_v_to_ma_l : g_cal_v_to_ma_r;
   float base;
-  if (session_feedback_base == FeedbackBase::STD) base = st.std_v * v_to_ma;
+  if (session_feedback_base == FeedbackBase::RMS) base = st.rms_v * v_to_ma;
   else base = fabsf(st.mean_v - offset_v) * v_to_ma;
   return base * session_feedback_coeff;
 }
@@ -813,7 +813,7 @@ static void drawPreStart() {
   oled.drawUTF8(0, 13, line);
   snprintf(line, sizeof(line), "%.0f мин", rt.duration_min);
   oled.drawUTF8(0, 25, line);
-  oled.drawUTF8(0, 37, "*подключите электроды*");
+  oled.drawUTF8(0, 37, "ПОДКЛЮЧИТЕ ЭЛЕКТРОДЫ");
   oled.drawUTF8(0, 52, "> старт");
   oledSendBuffer();
 }
@@ -840,7 +840,7 @@ static void drawFinish() {
   uint32_t secs = session_elapsed_sec % 60;
   snprintf(line, sizeof(line), "%u:%02u", (unsigned)mins, (unsigned)secs);
   oled.drawUTF8(0, 25, line);
-  oled.drawUTF8(0, 37, "*отсоедините электроды*");
+  oled.drawUTF8(0, 37, "ОТСОЕДИНИТЕ ЭЛЕКТРОДЫ");
   oled.drawUTF8(0, 52, "> меню");
   oledSendBuffer();
 }
@@ -920,7 +920,7 @@ static void drawCurrentScreen() {
         cnt++;
       }
       items[cnt++] = "Настройки";   // предпоследний (TODO #11)
-      items[cnt++] = "Выключить";   // последний
+      items[cnt++] = "Спячка";   // последний
       renderMenu(n > 0 ? "== Пресеты ==" : "== Главное меню ==", items, cnt);
       break;
     }
@@ -1005,7 +1005,7 @@ static void executeMainMenu() {
     pushScreen(SCR_SETTINGS_MENU);
     return;
   }
-  if (menu_selected == (uint8_t)(n + 1)) {   // последний — "Выключить" (TODO #11)
+  if (menu_selected == (uint8_t)(n + 1)) {   // последний — "Спячка" (TODO #11)
     go_sleep();
     return;
   }
@@ -1035,7 +1035,7 @@ static int maxMenuIndexForScreen(ScreenType scr) {
   if (scr == SCR_MAIN_MENU) {
     int n = (int)g_presets.size();
     if (n > MENU_MAX_PRESETS) n = MENU_MAX_PRESETS;
-    return n + 1; // ..., "Настройки" (n), "Выключить" (n+1)
+    return n + 1; // ..., "Настройки" (n), "Спячка" (n+1)
   }
   if (scr == SCR_SETTINGS_MENU) return 7;
   if (scr == SCR_CALIB_MENU) return 6;

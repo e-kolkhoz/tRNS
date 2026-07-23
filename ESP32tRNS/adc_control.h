@@ -6,7 +6,7 @@ struct AdcChannelStats {
     float min_v;
     float mean_v;
     float max_v;
-    float std_v;
+    float rms_v;   // RMS(Vadc - Voffset), В — энергия AC относительно калибровки
     bool  valid;
 };
 

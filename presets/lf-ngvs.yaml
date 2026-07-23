@@ -8,10 +8,8 @@ channels:
   mode: "left"
 
 feedback:
-  # Итоговая оценка амплитуды: base_value * amp_estimation_coeff
-  amp_estimation_base: "STD"
-  # Для гауссовского шума используем 3σ-оценку
-  amp_estimation_coeff: 3.0
+  # Crest factor левого канала WAV считается при загрузке пресета
+  amp_estimation_base: "AUTO_RMS"
 
 scope:
   # Для длинного WAV-лупа синхронизация не всегда нужна

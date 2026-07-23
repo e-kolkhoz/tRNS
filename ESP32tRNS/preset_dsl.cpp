@@ -3,6 +3,7 @@
 #include "dac_control.h"
 
 #include <FFat.h>
+#include <math.h>
 #include <string.h>
 
 namespace {
@@ -111,6 +112,62 @@ static bool validateParam(const ParamRange& p) {
     return true;
 }
 
+static constexpr float kSinCrestFactor = 1.414213562f;  // sqrt(2)
+
+// Crest factor левого канала WAV: max(|sample|) / RMS(sample), один проход.
+static bool wavLeftPeakAndCrest(const std::vector<int16_t>& samples, float* crest_out, String* err) {
+    if (!crest_out || !err) return false;
+    if (samples.empty()) {
+        *err = "WAV left channel has no samples";
+        return false;
+    }
+    int32_t peak = 0;
+    double sum_sq = 0.0;
+    for (size_t i = 0; i < samples.size(); i++) {
+        const int32_t v = samples[i];
+        const int32_t a = (v < 0) ? -v : v;
+        if (a > peak) peak = a;
+        sum_sq += (double)v * (double)v;
+    }
+    if (peak == 0) {
+        *err = "WAV left channel is silent (peak=0)";
+        return false;
+    }
+    const double rms = sqrt(sum_sq / (double)samples.size());
+    if (rms < 1e-9) {
+        *err = "WAV left channel RMS too small";
+        return false;
+    }
+    *crest_out = (float)((double)peak / rms);
+    return true;
+}
+
+// Разрешает AUTO_RMS для CONST/SIN; для WAV crest считается позже в scanAll().
+static bool finalizeFeedbackPreset(PresetDefinition* out, bool coeff_set, String* err) {
+    if (!out || !err) return false;
+
+    if (out->feedback_base == FeedbackBase::AUTO_RMS) {
+        if (coeff_set) {
+            *err = "feedback.amp_estimation_coeff forbidden with AUTO_RMS";
+            return false;
+        }
+        if (out->type == PresetType::CONST_DC) {
+            out->feedback_base = FeedbackBase::MEAN;
+            out->feedback_coeff = 1.0f;
+        } else if (out->type == PresetType::SIN) {
+            out->feedback_base = FeedbackBase::RMS;
+            out->feedback_coeff = kSinCrestFactor;
+        }
+        return true;
+    }
+
+    if (!coeff_set) {
+        *err = "feedback.amp_estimation_coeff required for MEAN|RMS";
+        return false;
+    }
+    return true;
+}
+
 static bool parseYamlPreset(File& f, const String& file_path, PresetDefinition* out, String* err) {
     if (!out || !err) return false;
     *out = PresetDefinition{};
@@ -120,6 +177,7 @@ static bool parseYamlPreset(File& f, const String& file_path, PresetDefinition* 
 
     std::vector<int> indents;
     std::vector<String> keys;
+    bool feedback_coeff_set = false;
 
     auto popToIndent = [&](int indent) {
         while (!indents.empty() && indent <= indents.back()) {
@@ -186,9 +244,10 @@ static bool parseYamlPreset(File& f, const String& file_path, PresetDefinition* 
         } else if (full == "feedback.amp_estimation_base") {
             String b = unquote(value);
             if (b == "MEAN") out->feedback_base = FeedbackBase::MEAN;
-            else if (b == "STD") out->feedback_base = FeedbackBase::STD;
+            else if (b == "RMS") out->feedback_base = FeedbackBase::RMS;
+            else if (b == "AUTO_RMS") out->feedback_base = FeedbackBase::AUTO_RMS;
             else {
-                *err = "feedback.amp_estimation_base must be MEAN|STD";
+                *err = "feedback.amp_estimation_base must be MEAN|RMS|AUTO_RMS";
                 return false;
             }
         } else if (full == "feedback.amp_estimation_coeff") {
@@ -198,6 +257,7 @@ static bool parseYamlPreset(File& f, const String& file_path, PresetDefinition* 
                 return false;
             }
             out->feedback_coeff = c;
+            feedback_coeff_set = true;
         } else if (full == "scope.sync_mode") {
             String sm = unquote(value);
             if (sm == "two_periods") out->scope_sync = ScopeSyncMode::TWO_PERIODS;
@@ -296,6 +356,9 @@ static bool parseYamlPreset(File& f, const String& file_path, PresetDefinition* 
         *err = "scope.sync_mode forbidden for CONST";
         return false;
     }
+    if (!finalizeFeedbackPreset(out, feedback_coeff_set, err)) {
+        return false;
+    }
     return true;
 }
 
@@ -351,6 +414,18 @@ std::vector<PresetDefinition> PresetDsl::scanAll() {
             p.sample_rate_hz = (int)wi.sampleRate;
             p.wav_left_samples.resize(got);
             p.wav_right_samples.resize(got);
+
+            float crest = 0.0f;
+            String wav_err;
+            if (!wavLeftPeakAndCrest(p.wav_left_samples, &crest, &wav_err)) {
+                errors.push_back(path + ": " + wav_err);
+                f.close();
+                continue;
+            }
+            if (p.feedback_base == FeedbackBase::AUTO_RMS) {
+                p.feedback_base = FeedbackBase::RMS;
+                p.feedback_coeff = crest;
+            }
         }
         out.push_back(p);
         f.close();

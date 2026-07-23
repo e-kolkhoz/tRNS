@@ -14,6 +14,8 @@ TaskHandle_t            s_task = nullptr;
 
 float    s_ring_l[ADC_RING_SIZE];
 float    s_ring_r[ADC_RING_SIZE];
+float    s_offset_l = DEF_ADC_OFFSET_L_V;
+float    s_offset_r = DEF_ADC_OFFSET_R_V;
 uint32_t s_wr_idx = 0;
 
 adc_channel_t s_ch_l = ADC_CHANNEL_0;
@@ -50,7 +52,7 @@ static bool decimPush(DecimState& st, uint16_t raw, float* ring, uint32_t idx) {
     return true;
 }
 
-static AdcChannelStats computeStats(const float* ring) {
+static AdcChannelStats computeStats(const float* ring, float offset_v) {
     AdcChannelStats out{};
     uint32_t count = s_wr_idx;
     if (count > ADC_RING_SIZE) count = ADC_RING_SIZE;
@@ -59,26 +61,25 @@ static AdcChannelStats computeStats(const float* ring) {
     uint32_t n = count;
 
     uint32_t start = (s_wr_idx + ADC_RING_SIZE - n) % ADC_RING_SIZE;
-    double sum = 0.0, sum2 = 0.0;
+    double sum = 0.0, sum2_bip = 0.0;
     float mn = ring[start];
     float mx = mn;
 
     for (uint32_t i = 0; i < n; ++i) {
         float v = ring[(start + i) % ADC_RING_SIZE];
-        sum  += v;
-        sum2 += (double)v * (double)v;
+        const float d = v - offset_v;
+        sum       += v;
+        sum2_bip  += (double)d * (double)d;
         if (v < mn) mn = v;
         if (v > mx) mx = v;
     }
 
     float mean = (float)(sum / (double)n);
-    float var  = (float)(sum2 / (double)n - (double)mean * (double)mean);
-    if (var < 0.0f) var = 0.0f;
 
     out.min_v  = mn;
     out.mean_v = mean;
     out.max_v  = mx;
-    out.std_v  = sqrtf(var);
+    out.rms_v  = sqrtf((float)(sum2_bip / (double)n));
     out.valid  = true;
     return out;
 }
@@ -228,6 +229,8 @@ void AdcControl::init() {
 void AdcControl::start(float off_l_v, float off_r_v) {
     if (s_running || !s_adc || !s_configured) return;
 
+    s_offset_l = off_l_v;
+    s_offset_r = off_r_v;
     s_wr_idx = 0;
     s_dec_l = {};
     s_dec_r = {};
@@ -262,8 +265,8 @@ void AdcControl::stop() {
     }
 }
 
-AdcChannelStats AdcControl::statsLeft()  { return computeStats(s_ring_l); }
-AdcChannelStats AdcControl::statsRight() { return computeStats(s_ring_r); }
+AdcChannelStats AdcControl::statsLeft()  { return computeStats(s_ring_l, s_offset_l); }
+AdcChannelStats AdcControl::statsRight() { return computeStats(s_ring_r, s_offset_r); }
 
 bool AdcControl::scopeTrace(bool left, float* out, uint8_t width,
                             uint32_t period_samples, uint8_t n_periods) {

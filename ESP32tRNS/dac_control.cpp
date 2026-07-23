@@ -211,9 +211,11 @@ void DacControl::playerTask(void* arg) {
     (void)arg;
     size_t k = 0;
 
-    for (;;) {
+    // Цикл по s_playing, не for(;;): stop() ждёт выхода задачи, потом i2s_stop.
+    // vTaskDelete из stop() при блокировке в i2s_write ломал I2S после 1-го сеанса (TODO #6).
+    while (s_playing) {
         int16_t buf[256 * 2];
-        if (s_playing && g_wave_len > 0) {
+        if (g_wave_len > 0) {
             const float gain = clamp01(g_gain);
             for (int j = 0; j < 256; j++) {
                 // g_wave: 0=L, 1=R. RIGHT_LEFT: buf[0]=R, buf[1]=L на шине I2S (TODO #7).
@@ -234,6 +236,9 @@ void DacControl::playerTask(void* arg) {
         size_t written = 0;
         i2s_write(s_i2s_port, buf, sizeof(buf), &written, portMAX_DELAY);
     }
+
+    s_task = nullptr;
+    vTaskDelete(nullptr);
 }
 
 void DacControl::init() {
@@ -296,23 +301,31 @@ void DacControl::start() {
     i2s_zero_dma_buffer(s_i2s_port);
     i2s_start(s_i2s_port);
 
+    s_playing = true;  // до xTaskCreate: playerTask крутится по s_playing
     if (s_task == nullptr) {
         xTaskCreatePinnedToCore(playerTask, "dac_sin", 3072, NULL, 6, &s_task, 1);
     }
-
-    s_playing = true;
 }
 
 void DacControl::stop() {
+    if (!s_playing && !s_task) return;
+
     s_playing = false;
     g_gain = 0.0f;
-    g_program = kIdleProgram;
-    g_wave_len = 1;
-    g_wave[0] = 0;
-    g_wave[1] = 0;
-    if (s_driver_installed) i2s_stop(s_i2s_port);
+
+    // Как adc_control.cpp (TODO #6): сначала задача выходит из i2s_write, потом i2s_stop.
+    // Раньше vTaskDelete здесь убивал playerTask в portMAX_DELAY → 2-й сеанс без сигнала.
+    for (int i = 0; i < 100 && s_task != nullptr; i++) {
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
     if (s_task) {
         vTaskDelete(s_task);
         s_task = nullptr;
     }
+    if (s_driver_installed) i2s_stop(s_i2s_port);
+
+    g_program = kIdleProgram;
+    g_wave_len = 1;
+    g_wave[0] = 0;
+    g_wave[1] = 0;
 }

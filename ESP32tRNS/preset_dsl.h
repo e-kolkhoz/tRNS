@@ -11,7 +11,8 @@ enum class PresetType : uint8_t {
 
 enum class FeedbackBase : uint8_t {
     MEAN = 0,
-    STD = 1,
+    RMS = 1,
+    AUTO_RMS = 2,
 };
 
 enum class ScopeSyncMode : uint8_t {

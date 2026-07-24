@@ -151,7 +151,7 @@ static bool finalizeFeedbackPreset(PresetDefinition* out, bool coeff_set, String
             *err = "feedback.amp_estimation_coeff forbidden with AUTO_RMS";
             return false;
         }
-        if (out->type == PresetType::CONST_DC) {
+        if (out->type == PresetType::CONST_DC || out->type == PresetType::TEST_CONST) {
             out->feedback_base = FeedbackBase::MEAN;
             out->feedback_coeff = 1.0f;
         } else if (out->type == PresetType::SIN) {
@@ -227,6 +227,7 @@ static bool parseYamlPreset(File& f, const String& file_path, PresetDefinition* 
         } else if (full == "type") {
             String t = unquote(value);
             if (t == "CONST") out->type = PresetType::CONST_DC;
+            else if (t == "TEST_CONST") out->type = PresetType::TEST_CONST;
             else if (t == "SIN") out->type = PresetType::SIN;
             else if (t == "WAV") out->type = PresetType::WAV;
             else {
@@ -319,9 +320,14 @@ static bool parseYamlPreset(File& f, const String& file_path, PresetDefinition* 
         return false;
     }
 
-    if (out->type == PresetType::CONST_DC || out->type == PresetType::SIN) {
+    if (out->type == PresetType::CONST_DC && out->amplitude_mA.min_v < 0.0f) {
+        *err = "CONST amplitude_mA.min must be >= 0";
+        return false;
+    }
+
+    if (out->type == PresetType::CONST_DC || out->type == PresetType::TEST_CONST || out->type == PresetType::SIN) {
         if (out->sample_rate_hz <= 0) {
-            *err = "sample_rate_hz.value required for CONST/SIN";
+            *err = "sample_rate_hz.value required for CONST/TEST_CONST/SIN";
             return false;
         }
         if (!isSupportedDacRate(out->sample_rate_hz)) {
@@ -352,8 +358,9 @@ static bool parseYamlPreset(File& f, const String& file_path, PresetDefinition* 
             return false;
         }
     }
-    if (out->type == PresetType::CONST_DC && out->scope_sync != ScopeSyncMode::NONE) {
-        *err = "scope.sync_mode forbidden for CONST";
+    if ((out->type == PresetType::CONST_DC || out->type == PresetType::TEST_CONST) &&
+        out->scope_sync != ScopeSyncMode::NONE) {
+        *err = "scope.sync_mode forbidden for CONST/TEST_CONST";
         return false;
     }
     if (!finalizeFeedbackPreset(out, feedback_coeff_set, err)) {

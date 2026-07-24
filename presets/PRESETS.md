@@ -14,9 +14,10 @@
 
 ## 1) Какие типы пресетов есть
 
-В `tES-DSL v1` поддерживаются только три типа:
+В `tES-DSL v1` поддерживаются типы:
 
 - `CONST` — постоянный ток (`tDCS`- одноканальный, `tDCS-2a`- два независимых анода).
+- `TEST_CONST` — лабораторный знаковый DC (отриц. mA, биполярная ось осциллографа); YAML создаётся отдельно.
 - `SIN` — параметрический синус (`tACS`).
 - `WAV` — сигнал из WAV-файла (`hf-tRNS`- tRNS 100-640Гц нормальное распределение, `lf-nGVS` тоже гауссовский, квазибелый в диапазоне 1-100Гц).
 
@@ -37,7 +38,7 @@
 
 - `dsl_version` (для этой прошивки только `1`)
 - `name`
-- `type` (`CONST` | `SIN` | `WAV`)
+- `type` (`CONST` | `TEST_CONST` | `SIN` | `WAV`)
 - `channels.mode` (`left` | `both`)
 - `feedback.amp_estimation_base` (`MEAN` | `RMS` | `AUTO_RMS`)
 - `feedback.amp_estimation_coeff` (число `> 0`) — **обязателен** для `MEAN`/`RMS`, **запрещён** для `AUTO_RMS`
@@ -78,7 +79,7 @@ some_param:
 
 | Режим | Когда | `base_value` | `amp_estimation_coeff` |
 |-------|--------|--------------|-------------------------|
-| **MEAN** | `CONST` (постоянный ток) | `\|mean(Vadc)−Voffset\|` | задаётся в YAML (`1.0`) |
+| **MEAN** | `CONST` / `TEST_CONST` | `\|mean−offset\|` или знаковый mean для `TEST_CONST` | задаётся в YAML (`1.0`) |
 | **RMS** | AC, coeff известен вручную | `RMS(Vbip)` | задаётся в YAML |
 | **AUTO_RMS** | AC, форма известна из генератора | `RMS(Vbip)` | **crest factor** формы, без YAML |
 
@@ -93,7 +94,7 @@ K = \frac{\max|s(t)|}{\mathrm{RMS}(s(t))}
 
 Разрешение `AUTO_RMS` при загрузке пресетов (`scanAll`):
 
-- **`CONST`** → `MEAN`, `coeff = 1.0` (синоним `MEAN × 1.0`)
+- **`CONST`** / **`TEST_CONST`** → `MEAN`, `coeff = 1.0`
 - **`SIN`** → `RMS`, `coeff = 1.414` (`√2`)
 - **`WAV`** → `RMS`, `coeff = K` по **левому** каналу лупа (один проход: peak + sum of squares)
 
@@ -136,6 +137,18 @@ Strict-правила:
 
 - `scope.sync_mode` (для `CONST` это запрещено).
 - `wave_file`.
+
+`amplitude_mA.min` должен быть ≥ 0 (strict).
+
+### 7.1a `TEST_CONST`
+
+Лабораторный тип для калибровки ADC/DAC: как `CONST`, но **знаковый** setpoint (`amplitude_mA.min` может быть &lt; 0).
+
+- DAC: signed-коды (отрицательный ток).
+- Feedback: `MEAN`, знаковый `(mean−offset)×V→mA` (не `|mean|`).
+- Осциллограф: биполярная ось `±1.2×|amp|`, тики `±|amp|`, `0`.
+- `AUTO_RMS` → `MEAN`, `coeff=1.0` (как у `CONST`).
+- `sample_rate_hz.value` обязателен; `scope.sync_mode` запрещён.
 
 ### 7.2 `SIN`
 

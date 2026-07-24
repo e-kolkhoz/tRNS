@@ -152,10 +152,6 @@ static String session_name = "preset";
 static int g_bat_pct_cached = 100;  // R.3: заряд, измеренный вне сеанса (ADC1 vs continuous)
 
 // Калибровки (TODO #1). Дефолты из config.h, персист в NVS (fallback-on-read, R.1).
-static float g_cal_voffset_l   = DEF_ADC_OFFSET_L_V;
-static float g_cal_voffset_r   = DEF_ADC_OFFSET_R_V;
-static float g_cal_v_to_ma_l   = DEF_ADC_V_TO_MA;
-static float g_cal_v_to_ma_r   = DEF_ADC_V_TO_MA;
 static float g_cal_dac_code_l  = DEF_DAC_CODE_TO_MA_L;
 static float g_cal_dac_code_r  = DEF_DAC_CODE_TO_MA_R;
 
@@ -211,20 +207,12 @@ static void saveParamNvs(const String& preset_id, const char* tag, float v) {
 
 // --- Калибровки (TODO #1) ---
 static void loadCalibration() {
-  g_cal_voffset_l   = g_pref.getFloat("cal_voff_l", DEF_ADC_OFFSET_L_V);
-  g_cal_voffset_r   = g_pref.getFloat("cal_voff_r", DEF_ADC_OFFSET_R_V);
-  g_cal_v_to_ma_l   = g_pref.getFloat("cal_vma_l",  DEF_ADC_V_TO_MA);
-  g_cal_v_to_ma_r   = g_pref.getFloat("cal_vma_r",  DEF_ADC_V_TO_MA);
   g_cal_dac_code_l  = g_pref.getFloat("cal_dac_l",  DEF_DAC_CODE_TO_MA_L);
   g_cal_dac_code_r  = g_pref.getFloat("cal_dac_r",  DEF_DAC_CODE_TO_MA_R);
   DacControl::setCodeToMa(g_cal_dac_code_l, g_cal_dac_code_r);
 }
 
 static void saveCalibration() {
-  g_pref.putFloat("cal_voff_l", g_cal_voffset_l);
-  g_pref.putFloat("cal_voff_r", g_cal_voffset_r);
-  g_pref.putFloat("cal_vma_l",  g_cal_v_to_ma_l);
-  g_pref.putFloat("cal_vma_r",  g_cal_v_to_ma_r);
   g_pref.putFloat("cal_dac_l",  g_cal_dac_code_l);
   g_pref.putFloat("cal_dac_r",  g_cal_dac_code_r);
   DacControl::setCodeToMa(g_cal_dac_code_l, g_cal_dac_code_r);
@@ -242,9 +230,7 @@ static void clearPresetNvs() {
 }
 
 static void clearCalibrationNvs() {
-  static const char* keys[] = {
-    "cal_voff_l", "cal_voff_r", "cal_vma_l", "cal_vma_r", "cal_dac_l", "cal_dac_r"
-  };
+  static const char* keys[] = { "cal_dac_l", "cal_dac_r" };
   for (const char* k : keys) g_pref.remove(k);
   loadCalibration();
 }
@@ -423,7 +409,7 @@ static void startSession(const PresetDefinition& preset, const PresetRuntime& rt
   p.amp_l_ma = session_amp_l_mA;
   p.amp_r_ma = session_amp_r_mA;
   p.sample_rate_hz = preset.sample_rate_hz;
-  if (preset.type == PresetType::CONST_DC) {
+  if (preset.type == PresetType::CONST_DC || preset.type == PresetType::TEST_CONST) {
     p.waveform = DacWaveform::CONST_DC;
     DacControl::setProgram(p);
   } else if (preset.type == PresetType::SIN) {
@@ -477,7 +463,7 @@ static void startSession(const PresetDefinition& preset, const PresetRuntime& rt
 
   DacControl::setGain(0.0f);
   DacControl::start();
-  AdcControl::start(g_cal_voffset_l, g_cal_voffset_r);
+  AdcControl::start();
 
   session_state = STATE_FADEIN;
   session_state_start_ms = millis();
@@ -579,12 +565,11 @@ static void renderMenu(const char* title, const char* choices[], uint8_t count) 
 #define DASH_SCOPE_H   36
 
 static float feedbackForChannel(const AdcChannelStats& st, bool is_left) {
+  (void)is_left;
   if (!st.valid) return 0.0f;
-  const float offset_v = is_left ? g_cal_voffset_l : g_cal_voffset_r;
-  const float v_to_ma  = is_left ? g_cal_v_to_ma_l : g_cal_v_to_ma_r;
   float base;
-  if (session_feedback_base == FeedbackBase::RMS) base = st.rms_v * v_to_ma;
-  else base = fabsf(st.mean_v - offset_v) * v_to_ma;
+  if (session_feedback_base == FeedbackBase::RMS) base = st.rms_ma;
+  else base = (session_type == PresetType::TEST_CONST) ? st.mean_ma : fabsf(st.mean_ma);
   return base * session_feedback_coeff;
 }
 
@@ -593,19 +578,20 @@ static void drawDottedHLine(int x, int y, int w) {
 }
 
 // Рисует осциллограмму одного канала: линейная V->mA, тики по амплитуде.
-// CONST -> униполярная развёртка, SIN/WAV -> биполярная.
+// CONST -> униполярная развёртка; SIN/WAV/TEST_CONST -> биполярная (TEST_CONST: ±|amp|).
 static void drawScopeChannel(bool left) {
   const float amp = left ? session_amp_l_mA : session_amp_r_mA;
   const uint32_t scope_period = left ? session_scope_period : session_scope_period_r;
   const bool bipolar = (session_type != PresetType::CONST_DC);
-  const float y_min = bipolar ? -amp * 1.2f : -amp * 0.1f;
-  const float y_max = amp * 1.2f;
+  const float amp_axis = bipolar ? fabsf(amp) : amp;
+  const float y_min = bipolar ? -amp_axis * 1.2f : -amp_axis * 0.1f;
+  const float y_max = amp_axis * 1.2f;
   float y_range = y_max - y_min;
   if (y_range < 0.01f) y_range = 0.01f;
 
   oled.setFont(u8g2_font_4x6_tf);
   const int nticks = bipolar ? 3 : 2;
-  const float ticks[3] = { amp, 0.0f, -amp };
+  const float ticks[3] = { amp_axis, 0.0f, -amp_axis };
   for (int t = 0; t < nticks; t++) {
     float nrm = (ticks[t] - y_min) / y_range;
     int py = DASH_SCOPE_Y + DASH_SCOPE_H - 1 - (int)(nrm * (DASH_SCOPE_H - 1));
@@ -618,11 +604,9 @@ static void drawScopeChannel(bool left) {
 
   static float trace[DASH_SCOPE_W];
   if (!AdcControl::scopeTrace(left, trace, DASH_SCOPE_W, scope_period, session_scope_nper)) return;
-  const float offset  = left ? g_cal_voffset_l : g_cal_voffset_r;
-  const float v_to_ma = left ? g_cal_v_to_ma_l : g_cal_v_to_ma_r;
   int prev_py = -1;
   for (int x = 0; x < DASH_SCOPE_W; x++) {
-    float ma = (trace[x] - offset) * v_to_ma;
+    float ma = trace[x];
     float nrm = (ma - y_min) / y_range;
     int py = DASH_SCOPE_Y + DASH_SCOPE_H - 1 - (int)(nrm * (DASH_SCOPE_H - 1));
     if (py < DASH_SCOPE_Y) py = DASH_SCOPE_Y;
@@ -648,22 +632,70 @@ static void drawMeterAndProgress(const char* metric) {
   oled.drawHLine(0, 63, (int)(progress * 128));
 }
 
-static void drawBothChannelBlock(bool left, int y, const AdcChannelStats& st) {
-  const float off = left ? g_cal_voffset_l : g_cal_voffset_r;
-  const float k   = left ? g_cal_v_to_ma_l : g_cal_v_to_ma_r;
-  char l1[24], l2[32];
-  if (st.valid) {
-    const float peak_v  = fmaxf(fabsf(st.max_v - off), fabsf(st.min_v - off));
-    const float max_ma  = peak_v * k;
-    const float mean_ma = fabsf(st.mean_v - off) * k;
-    snprintf(l1, sizeof(l1), "%c: макс. %.2fмА", left ? 'L' : 'R', max_ma);
-    snprintf(l2, sizeof(l2), "   ср. %.2fмА (%.2fВ)", mean_ma, st.mean_v);
+// BOTH-дашборд: шапка (имя+задание+батарея) и таблица L|R.
+static void drawBothHeaderLine() {
+  char line[44];
+  if (session_type == PresetType::SIN) {
+    if (session_channels_both && session_freq_l_hz != session_freq_r_hz) {
+      snprintf(line, sizeof(line), "%s %.0f/%.0fHz %.1f|%.1fмА",
+               session_name.c_str(), session_freq_l_hz, session_freq_r_hz,
+               session_amp_l_mA, session_amp_r_mA);
+    } else if (session_channels_both) {
+      snprintf(line, sizeof(line), "%s %.0fHz %.1f|%.1fмА",
+               session_name.c_str(), session_freq_l_hz,
+               session_amp_l_mA, session_amp_r_mA);
+    } else {
+      snprintf(line, sizeof(line), "%s %.0fHz %.1fмА",
+               session_name.c_str(), session_freq_l_hz, session_amp_l_mA);
+    }
+  } else if (session_channels_both) {
+    snprintf(line, sizeof(line), "%s %.1f|%.1fмА",
+             session_name.c_str(), session_amp_l_mA, session_amp_r_mA);
   } else {
-    snprintf(l1, sizeof(l1), "%c: макс. --", left ? 'L' : 'R');
-    snprintf(l2, sizeof(l2), "   ср. -- (--)");
+    snprintf(line, sizeof(line), "%s %.1fмА",
+             session_name.c_str(), session_amp_l_mA);
   }
-  oled.drawUTF8(0, y, l1);
-  oled.drawUTF8(0, y + 9, l2);
+  char batt[8];
+  snprintf(batt, sizeof(batt), "%d%%", batteryPct());
+  const int batt_w = oled.getUTF8Width(batt);
+  oled.drawUTF8(0, 8, line);
+  oled.drawUTF8(128 - batt_w, 8, batt);
+}
+
+static float bothMeanMa(const AdcChannelStats& st) {
+  if (!st.valid) return 0.0f;
+  return (session_type == PresetType::TEST_CONST) ? st.mean_ma : fabsf(st.mean_ma);
+}
+
+static void drawBothTableRowU16(int y, const char* label,
+                                const AdcChannelStats& sl, const AdcChannelStats& sr) {
+  char buf[32];
+  if (sl.valid && sr.valid) {
+    snprintf(buf, sizeof(buf), "%s| %4u | %4u", label, (unsigned)sl.mean_code, (unsigned)sr.mean_code);
+  } else if (sl.valid) {
+    snprintf(buf, sizeof(buf), "%s| %4u | --", label, (unsigned)sl.mean_code);
+  } else if (sr.valid) {
+    snprintf(buf, sizeof(buf), "%s| -- | %4u", label, (unsigned)sr.mean_code);
+  } else {
+    snprintf(buf, sizeof(buf), "%s| -- | --", label);
+  }
+  oled.drawUTF8(0, y, buf);
+}
+
+static void drawBothTableRow(int y, const char* label,
+                             const AdcChannelStats& sl, const AdcChannelStats& sr,
+                             float vl, float vr) {
+  char buf[32];
+  if (sl.valid && sr.valid) {
+    snprintf(buf, sizeof(buf), "%s| %.2f | %.2f", label, vl, vr);
+  } else if (sl.valid) {
+    snprintf(buf, sizeof(buf), "%s| %.2f | --", label, vl);
+  } else if (sr.valid) {
+    snprintf(buf, sizeof(buf), "%s| -- | %.2f", label, vr);
+  } else {
+    snprintf(buf, sizeof(buf), "%s| -- | --", label);
+  }
+  oled.drawUTF8(0, y, buf);
 }
 
 static void drawDashboard() {
@@ -676,36 +708,21 @@ static void drawDashboard() {
 
   char header[48], metric[20];
   if (dashboard_view == DASH_BOTH) {
-    // L+R (TODO #14): <имя> [Hz] mA ; поканально макс./ср. мА + среднее ADC (В).
     oled.setFont(u8g2_font_5x8_t_cyrillic);
-    char head[48];
-    if (session_channels_both) {
-      if (session_type == PresetType::SIN) {
-        snprintf(head, sizeof(head), "%s %.0f/%.0fHz %.1f/%.1fmA",
-                 session_name.c_str(), session_freq_l_hz, session_freq_r_hz,
-                 session_amp_l_mA, session_amp_r_mA);
-      } else {
-        snprintf(head, sizeof(head), "%s L%.1f/R%.1fmA",
-                 session_name.c_str(), session_amp_l_mA, session_amp_r_mA);
-      }
-    } else if (session_type == PresetType::SIN) {
-      snprintf(head, sizeof(head), "%s %.0fHz %.1fmA",
-               session_name.c_str(), session_freq_l_hz, session_amp_l_mA);
-    } else {
-      snprintf(head, sizeof(head), "%s %.1fmA", session_name.c_str(), session_amp_l_mA);
-    }
-    oled.drawUTF8(0, 0, head);
-    char batt[8];
-    snprintf(batt, sizeof(batt), "%d%%", batteryPct());
-    oled.drawUTF8(128 - oled.getUTF8Width(batt), 0, batt);
 
-    drawBothChannelBlock(true,  11, l);
-    drawBothChannelBlock(false, 29, r);
+    drawBothHeaderLine();
+    drawBothTableRow(16, "M   ", l, r, bothMeanMa(l),  bothMeanMa(r));
+    drawBothTableRowU16(24, "MC  ", l, r);
+    drawBothTableRow(32, "RMS ", l, r,
+                     l.valid ? l.rms_ma : 0.0f,
+                     r.valid ? r.rms_ma : 0.0f);
+    drawBothTableRow(40, "AMP ", l, r, fb_l, fb_r);
 
     uint32_t elapsed = (millis() - session_started_ms) / 1000;
-    char tb[24];
-    snprintf(tb, sizeof(tb), "t %u:%02u / %.0fм",
-             (unsigned)(elapsed / 60), (unsigned)(elapsed % 60), session_duration_min);
+    char tb[32];
+    snprintf(tb, sizeof(tb), "x%.1f t %u:%02u / %.0fм",
+             DacControl::gain(), (unsigned)(elapsed / 60), (unsigned)(elapsed % 60),
+             session_duration_min);
     oled.drawUTF8(0, 48, tb);
 
     float total = session_duration_min * 60.0f;
@@ -965,16 +982,12 @@ static void drawCurrentScreen() {
       break;
     }
     case SCR_CALIB_MENU: {
-      char line4[32], line5[32], line6[32];
-      const char* citems[7] = { line0, line1, line2, line3, line4, line5, line6 };
+      char line2[32], line3[32];
+      const char* citems[3] = { line0, line2, line3 };
       snprintf(line0, sizeof(line0), "<-Назад");
-      snprintf(line1, sizeof(line1), "Voffset L: %.2f", g_cal_voffset_l);
-      snprintf(line2, sizeof(line2), "Voffset R: %.2f", g_cal_voffset_r);
-      snprintf(line3, sizeof(line3), "V→mA L: %.2f", g_cal_v_to_ma_l);
-      snprintf(line4, sizeof(line4), "V→mA R: %.2f", g_cal_v_to_ma_r);
-      snprintf(line5, sizeof(line5), "DAC к/мА L: %d", (int)lroundf(g_cal_dac_code_l));
-      snprintf(line6, sizeof(line6), "DAC к/мА R: %d", (int)lroundf(g_cal_dac_code_r));
-      renderMenu("== Калибровка ==", citems, 7);
+      snprintf(line2, sizeof(line2), "DAC к/мА L: %d", (int)lroundf(g_cal_dac_code_l));
+      snprintf(line3, sizeof(line3), "DAC к/мА R: %d", (int)lroundf(g_cal_dac_code_r));
+      renderMenu("== Калибровка ==", citems, 3);
       break;
     }
     case SCR_DASHBOARD:
@@ -1038,7 +1051,7 @@ static int maxMenuIndexForScreen(ScreenType scr) {
     return n + 1; // ..., "Настройки" (n), "Спячка" (n+1)
   }
   if (scr == SCR_SETTINGS_MENU) return 7;
-  if (scr == SCR_CALIB_MENU) return 6;
+  if (scr == SCR_CALIB_MENU) return 2;
   if (scr == SCR_CONFIRM) return 1;
   if (scr == SCR_FINISH) return 0;
   if (scr == SCR_PRE_START) return 0;
@@ -1110,12 +1123,8 @@ static void handleClick() {
     case SCR_CALIB_MENU:
       switch (menu_selected) {
         case 0: popScreen(); break;
-        case 1: openEditor("Voffset L, V", &g_cal_voffset_l, CAL_VOFFSET_MIN, CAL_VOFFSET_MAX, CAL_VOFFSET_STEP, false, true); break;
-        case 2: openEditor("Voffset R, V", &g_cal_voffset_r, CAL_VOFFSET_MIN, CAL_VOFFSET_MAX, CAL_VOFFSET_STEP, false, true); break;
-        case 3: openEditor("V->mA L", &g_cal_v_to_ma_l, CAL_V_TO_MA_MIN, CAL_V_TO_MA_MAX, CAL_V_TO_MA_STEP, false, true); break;
-        case 4: openEditor("V->mA R", &g_cal_v_to_ma_r, CAL_V_TO_MA_MIN, CAL_V_TO_MA_MAX, CAL_V_TO_MA_STEP, false, true); break;
-        case 5: openEditor("DAC код/мА L", &g_cal_dac_code_l, CAL_DAC_CODE_MIN, CAL_DAC_CODE_MAX, CAL_DAC_CODE_STEP, true, true); break;
-        case 6: openEditor("DAC код/мА R", &g_cal_dac_code_r, CAL_DAC_CODE_MIN, CAL_DAC_CODE_MAX, CAL_DAC_CODE_STEP, true, true); break;
+        case 1: openEditor("DAC код/мА L", &g_cal_dac_code_l, CAL_DAC_CODE_MIN, CAL_DAC_CODE_MAX, CAL_DAC_CODE_STEP, true, true); break;
+        case 2: openEditor("DAC код/мА R", &g_cal_dac_code_r, CAL_DAC_CODE_MIN, CAL_DAC_CODE_MAX, CAL_DAC_CODE_STEP, true, true); break;
       }
       break;
     case SCR_EDITOR:

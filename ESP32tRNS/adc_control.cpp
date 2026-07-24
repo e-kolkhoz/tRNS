@@ -1,4 +1,5 @@
 #include "adc_control.h"
+#include "adc_calibration.h"
 #include "config.h"
 
 #include <Arduino.h>
@@ -14,8 +15,8 @@ TaskHandle_t            s_task = nullptr;
 
 float    s_ring_l[ADC_RING_SIZE];
 float    s_ring_r[ADC_RING_SIZE];
-float    s_offset_l = DEF_ADC_OFFSET_L_V;
-float    s_offset_r = DEF_ADC_OFFSET_R_V;
+uint16_t s_code_l[ADC_RING_SIZE];
+uint16_t s_code_r[ADC_RING_SIZE];
 uint32_t s_wr_idx = 0;
 
 adc_channel_t s_ch_l = ADC_CHANNEL_0;
@@ -37,59 +38,62 @@ static inline int32_t dither_lsb() {
     return (s_lfsr & 1u) ? 1 : -1;
 }
 
-static inline float codeToVolts(uint16_t code) {
-    return (float)code * ADC_MAX_VOLTAGE / 4095.0f;
-}
-
-static bool decimPush(DecimState& st, uint16_t raw, float* ring, uint32_t idx) {
+static bool decimPush(DecimState& st, uint16_t raw, bool is_left,
+                      float* ring_ma, uint16_t* ring_code, uint32_t idx) {
     st.acc += (int32_t)raw + dither_lsb();
     if (++st.n < ADC_DECIM) return false;
 
     uint16_t avg = (uint16_t)(st.acc / (int32_t)ADC_DECIM);
     st.acc = 0;
     st.n   = 0;
-    ring[idx] = codeToVolts(avg);
+    ring_code[idx] = avg;
+    ring_ma[idx]   = is_left ? adcCodeToMaL(avg) : adcCodeToMaR(avg);
     return true;
 }
 
-static AdcChannelStats computeStats(const float* ring, float offset_v) {
+static AdcChannelStats computeStats(const float* ring_ma, const uint16_t* ring_code) {
     AdcChannelStats out{};
     uint32_t count = s_wr_idx;
     if (count > ADC_RING_SIZE) count = ADC_RING_SIZE;
     if (count < (uint32_t)(ADC_OUT_RATE_HZ / 10)) return out;
 
-    uint32_t n = count;
+    const uint32_t n = count;
+    const uint32_t start = (s_wr_idx + ADC_RING_SIZE - n) % ADC_RING_SIZE;
 
-    uint32_t start = (s_wr_idx + ADC_RING_SIZE - n) % ADC_RING_SIZE;
-    double sum = 0.0, sum2_bip = 0.0;
-    float mn = ring[start];
+    double sum = 0.0, sum2_ac = 0.0, sum_code = 0.0;
+    float mn = ring_ma[start];
     float mx = mn;
 
     for (uint32_t i = 0; i < n; ++i) {
-        float v = ring[(start + i) % ADC_RING_SIZE];
-        const float d = v - offset_v;
-        sum       += v;
-        sum2_bip  += (double)d * (double)d;
-        if (v < mn) mn = v;
-        if (v > mx) mx = v;
+        const uint32_t idx = (start + i) % ADC_RING_SIZE;
+        const float ma = ring_ma[idx];
+        sum      += ma;
+        sum_code += ring_code[idx];
+        if (ma < mn) mn = ma;
+        if (ma > mx) mx = ma;
     }
 
-    float mean = (float)(sum / (double)n);
+    const float mean = (float)(sum / (double)n);
+    for (uint32_t i = 0; i < n; ++i) {
+        const float d = ring_ma[(start + i) % ADC_RING_SIZE] - mean;
+        sum2_ac += (double)d * (double)d;
+    }
 
-    out.min_v  = mn;
-    out.mean_v = mean;
-    out.max_v  = mx;
-    out.rms_v  = sqrtf((float)(sum2_bip / (double)n));
-    out.valid  = true;
+    out.min_ma  = mn;
+    out.mean_ma = mean;
+    out.max_ma  = mx;
+    out.rms_ma  = sqrtf((float)(sum2_ac / (double)n));
+    {
+        const float code = (float)(sum_code / (double)n);
+        if (code < 0.0f)      out.mean_code = 0;
+        else if (code > 4095.0f) out.mean_code = 4095;
+        else out.mean_code = (uint16_t)lroundf(code);
+    }
+    out.valid = true;
     return out;
 }
 
-// Стабильная развёртка (TODO #8). s_wr_idx — монотонный абсолютный счётчик выходных
-// отсчётов с начала сеанса, поэтому номер отсчёта = его время (Fs фиксирована).
-// Синхронный режим: старт окна выравниваем по сетке периодов от абсолютного нуля
-// (start_abs = целое число периодов), тогда фаза старта одинакова в каждом кадре
-// и картинка стоит. Требуем, чтобы (n+1) периодов ещё лежали в кольце.
-static bool scopeTraceImpl(const float* ring, float* out, uint8_t width,
+static bool scopeTraceImpl(const float* ring_ma, float* out, uint8_t width,
                            uint32_t period_samples, uint8_t n_periods) {
     uint32_t count = s_wr_idx;
     if (count > ADC_RING_SIZE) count = ADC_RING_SIZE;
@@ -103,7 +107,6 @@ static bool scopeTraceImpl(const float* ring, float* out, uint8_t width,
     const bool synced = (T >= 2) && (n_periods > 0) && (m >= n_periods) &&
                         ((n_periods + 1) * T <= count);
     if (synced) {
-        // Окно ровно n целых периодов, правый край — граница периода (не newest).
         span      = (uint32_t)n_periods * T;
         start_abs = m * T - span;
         hi        = m * T - 1;
@@ -120,7 +123,7 @@ static bool scopeTraceImpl(const float* ring, float* out, uint8_t width,
         uint32_t abs_idx = start_abs + (uint32_t)(((uint64_t)x * span) / width);
         if (abs_idx < lo) abs_idx = lo;
         if (abs_idx > hi) abs_idx = hi;
-        out[x] = ring[abs_idx % ADC_RING_SIZE];
+        out[x] = ring_ma[abs_idx % ADC_RING_SIZE];
     }
     return true;
 }
@@ -172,8 +175,8 @@ void adcTask(void*) {
 
             if (have_l && have_r) {
                 uint32_t idx = s_wr_idx % ADC_RING_SIZE;
-                bool dl = decimPush(s_dec_l, raw_l, s_ring_l, idx);
-                bool dr = decimPush(s_dec_r, raw_r, s_ring_r, idx);
+                bool dl = decimPush(s_dec_l, raw_l, true,  s_ring_l, s_code_l, idx);
+                bool dr = decimPush(s_dec_r, raw_r, false, s_ring_r, s_code_r, idx);
                 if (dl && dr) {
                     s_wr_idx++;
                 }
@@ -182,8 +185,6 @@ void adcTask(void*) {
         }
     }
 
-    // Грациозный выход (см. TODO #6): помечаем завершение до самоудаления, чтобы stop()
-    // не убивал задачу, заблокированную в adc_continuous_read.
     s_task = nullptr;
     vTaskDelete(nullptr);
 }
@@ -226,17 +227,17 @@ void AdcControl::init() {
     s_configured = (adc_continuous_config(s_adc, &cfg) == ESP_OK);
 }
 
-void AdcControl::start(float off_l_v, float off_r_v) {
+void AdcControl::start() {
     if (s_running || !s_adc || !s_configured) return;
 
-    s_offset_l = off_l_v;
-    s_offset_r = off_r_v;
     s_wr_idx = 0;
     s_dec_l = {};
     s_dec_r = {};
     for (uint32_t i = 0; i < ADC_RING_SIZE; ++i) {
-        s_ring_l[i] = off_l_v;
-        s_ring_r[i] = off_r_v;
+        s_ring_l[i] = 0.0f;
+        s_ring_r[i] = 0.0f;
+        s_code_l[i] = 0;
+        s_code_r[i] = 0;
     }
 
     if (adc_continuous_start(s_adc) != ESP_OK) {
@@ -251,12 +252,10 @@ void AdcControl::stop() {
     if (!s_running) return;
     s_running = false;
 
-    // Ждём, пока adcTask сам выйдет (adc_continuous_read возвращается по таймауту ~10 мс)
-    // и освободит драйвер. Только потом останавливаем ADC. См. TODO #6.
     for (int i = 0; i < 100 && s_task != nullptr; i++) {
         vTaskDelay(pdMS_TO_TICKS(5));
     }
-    if (s_task) {  // подстраховка
+    if (s_task) {
         vTaskDelete(s_task);
         s_task = nullptr;
     }
@@ -265,8 +264,13 @@ void AdcControl::stop() {
     }
 }
 
-AdcChannelStats AdcControl::statsLeft()  { return computeStats(s_ring_l, s_offset_l); }
-AdcChannelStats AdcControl::statsRight() { return computeStats(s_ring_r, s_offset_r); }
+AdcChannelStats AdcControl::statsLeft() {
+    return computeStats(s_ring_l, s_code_l);
+}
+
+AdcChannelStats AdcControl::statsRight() {
+    return computeStats(s_ring_r, s_code_r);
+}
 
 bool AdcControl::scopeTrace(bool left, float* out, uint8_t width,
                             uint32_t period_samples, uint8_t n_periods) {

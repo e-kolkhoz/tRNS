@@ -28,6 +28,13 @@ static int16_t maToPeakCodes(float ma, float code_to_ma) {
     return (int16_t)c;
 }
 
+static int16_t maToSignedPeakCodes(float ma, float code_to_ma) {
+    int32_t c = (int32_t)lroundf(ma * code_to_ma);
+    if (c > 32767) c = 32767;
+    if (c < -32768) c = -32768;
+    return (int16_t)c;
+}
+
 static float clamp01(float v) {
     if (v < 0.0f) return 0.0f;
     if (v > 1.0f) return 1.0f;
@@ -35,11 +42,10 @@ static float clamp01(float v) {
 }
 
 static void fill_const(const DacProgram& program) {
-    const int16_t amp_l = maToPeakCodes(program.amp_l_ma, g_code_to_ma_l);
-    const int16_t amp_r = maToPeakCodes(program.amp_r_ma, g_code_to_ma_r);
+    // Signed codes: TEST_CONST / отриц. mA; положительный CONST без изменений.
     g_wave_len = 1;
-    g_wave[0] = amp_l; // L (индекс 0 = физический левый канал, TODO #7)
-    g_wave[1] = amp_r; // R
+    g_wave[0] = maToSignedPeakCodes(program.amp_l_ma, g_code_to_ma_l);
+    g_wave[1] = maToSignedPeakCodes(program.amp_r_ma, g_code_to_ma_r);
 }
 
 static int gcd_int(int a, int b) {
@@ -252,8 +258,11 @@ void DacControl::init() {
 
 void DacControl::setProgram(const DacProgram& program) {
     DacProgram p = program;
-    if (p.amp_l_ma < 0.0f) p.amp_l_ma = 0.0f;
-    if (p.amp_r_ma < 0.0f) p.amp_r_ma = 0.0f;
+    // Отриц. amp только для CONST (TEST_CONST); SIN/WAV — peak ≥ 0.
+    if (p.waveform != DacWaveform::CONST_DC) {
+        if (p.amp_l_ma < 0.0f) p.amp_l_ma = 0.0f;
+        if (p.amp_r_ma < 0.0f) p.amp_r_ma = 0.0f;
+    }
     if (p.sample_rate_hz <= 0) p.sample_rate_hz = DAC_SAMPLE_RATE;
     rebuildWave(p);
     g_program = p;

@@ -7,6 +7,7 @@ enum class PresetType : uint8_t {
     CONST_DC = 0,
     SIN = 1,
     WAV = 2,
+    TEST_CONST = 3,  // lab: signed DC, bipolar scope axis
 };
 
 enum class FeedbackBase : uint8_t {

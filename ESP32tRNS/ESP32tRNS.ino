@@ -571,16 +571,17 @@ static void drawSessionConfigHeader(bool use_right_channel) {
   const float ch_amp  = use_right_channel ? session_amp_r_mA : session_amp_l_mA;
   const float ch_freq = use_right_channel ? session_freq_r_hz : session_freq_l_hz;
   if (session_type == PresetType::SIN) {
-    snprintf(header, sizeof(header), "%s %.0fHz %.1fmA %.0fм",
-             session_name.c_str(), ch_freq, ch_amp, session_duration_min);
+    snprintf(header, sizeof(header), "%s %.0fHz %.1fmA %um",
+             session_name.c_str(), ch_freq, ch_amp, (unsigned)session_duration_min);
   } else if (session_channels_both) {
-    snprintf(header, sizeof(header), "%s L%.1f/R%.1fмА %.0fм",
-             session_name.c_str(), session_amp_l_mA, session_amp_r_mA, session_duration_min);
+    snprintf(header, sizeof(header), "%s L%.1f/R%.1fмА %um",
+             session_name.c_str(), session_amp_l_mA, session_amp_r_mA,
+             (unsigned)session_duration_min);
   } else {
-    snprintf(header, sizeof(header), "%s %.1fmA %.0fм",
-             session_name.c_str(), ch_amp, session_duration_min);
+    snprintf(header, sizeof(header), "%s %.1fmA %um",
+             session_name.c_str(), ch_amp, (unsigned)session_duration_min);
   }
-  oled.drawUTF8(0, 11, header);
+  oled.drawUTF8(0, 0, header);
 }
 
 static float feedbackForChannel(const AdcChannelStats& st, bool is_left) {

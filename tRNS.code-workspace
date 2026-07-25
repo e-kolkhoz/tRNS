@@ -2,9 +2,6 @@
 	"folders": [
 		{
 			"path": "."
-		},
-		{
-			"path": "../../../../dev_tRNS"
 		}
 	],
 	"settings": {

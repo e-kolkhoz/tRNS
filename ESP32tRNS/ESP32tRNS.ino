@@ -559,10 +559,29 @@ static void renderMenu(const char* title, const char* choices[], uint8_t count) 
 }
 
 // --- Осциллограф дашборда (R.6/R.8) ---
-#define DASH_SCOPE_X   16
-#define DASH_SCOPE_W   112
+#define DASH_SCOPE_X   17
+#define DASH_SCOPE_W   111
 #define DASH_SCOPE_Y   12
-#define DASH_SCOPE_H   36
+#define DASH_SCOPE_H   38
+
+// Шапка L/R как в v0.9: «tACS 140Hz 1.0mA 20m».
+static void drawSessionConfigHeader(bool use_right_channel) {
+  oled.setFont(u8g2_font_6x12_t_cyrillic);
+  char header[44];
+  const float ch_amp  = use_right_channel ? session_amp_r_mA : session_amp_l_mA;
+  const float ch_freq = use_right_channel ? session_freq_r_hz : session_freq_l_hz;
+  if (session_type == PresetType::SIN) {
+    snprintf(header, sizeof(header), "%s %.0fHz %.1fmA %.0fм",
+             session_name.c_str(), ch_freq, ch_amp, session_duration_min);
+  } else if (session_channels_both) {
+    snprintf(header, sizeof(header), "%s L%.1f/R%.1fмА %.0fм",
+             session_name.c_str(), session_amp_l_mA, session_amp_r_mA, session_duration_min);
+  } else {
+    snprintf(header, sizeof(header), "%s %.1fmA %.0fм",
+             session_name.c_str(), ch_amp, session_duration_min);
+  }
+  oled.drawUTF8(0, 11, header);
+}
 
 static float feedbackForChannel(const AdcChannelStats& st, bool is_left) {
   (void)is_left;
@@ -589,7 +608,7 @@ static void drawScopeChannel(bool left) {
   float y_range = y_max - y_min;
   if (y_range < 0.01f) y_range = 0.01f;
 
-  oled.setFont(u8g2_font_4x6_tf);
+  oled.setFont(u8g2_font_4x6_tr);
   const int nticks = bipolar ? 3 : 2;
   const float ticks[3] = { amp_axis, 0.0f, -amp_axis };
   for (int t = 0; t < nticks; t++) {
@@ -616,15 +635,23 @@ static void drawScopeChannel(bool left) {
   }
 }
 
-// Нижняя строка-показометр: усиление gain, метрика фидбэка (мА), время + прогресс-бар 1px.
+// L/R: gain слева, метрика по центру, время справа.
 static void drawMeterAndProgress(const char* metric) {
   oled.setFont(u8g2_font_6x12_t_cyrillic);
   uint32_t elapsed = (millis() - session_started_ms) / 1000;
   uint16_t mm = elapsed / 60;
   uint8_t ss = elapsed % 60;
-  char line[32];
-  snprintf(line, sizeof(line), "x%.1f %s %02u:%02u", DacControl::gain(), metric, mm, ss);
-  oled.drawStr(0, 52, line);
+  if (mm > 99) { mm = 99; ss = 59; }
+
+  char gain[8], time[8];
+  snprintf(gain, sizeof(gain), "x%.1f", DacControl::gain());
+  snprintf(time, sizeof(time), "%02u:%02u", (unsigned)mm, (unsigned)ss);
+
+  oled.drawStr(0, 52, gain);
+  const int mw = oled.getStrWidth(metric);
+  oled.drawStr((128 - mw) / 2, 52, metric);
+  const int tw = oled.getStrWidth(time);
+  oled.drawStr(128 - tw, 52, time);
 
   float total = session_duration_min * 60.0f;
   float progress = (total > 0.0f) ? (float)elapsed / total : 0.0f;
@@ -706,7 +733,7 @@ static void drawDashboard() {
   const float fb_l = feedbackForChannel(l, true);
   const float fb_r = feedbackForChannel(r, false);
 
-  char header[48], metric[20];
+  char metric[20];
   if (dashboard_view == DASH_BOTH) {
     oled.setFont(u8g2_font_5x8_t_cyrillic);
 
@@ -733,21 +760,8 @@ static void drawDashboard() {
     return;
   }
 
-  oled.setFont(u8g2_font_6x12_t_cyrillic);
-  // L/R: осциллограмма + выставленные параметры (TODO #13).
   const bool left = (dashboard_view == DASH_LEFT);
-  const char ch = left ? 'L' : 'R';
-  const float ch_amp  = left ? session_amp_l_mA : session_amp_r_mA;
-  const float ch_freq = left ? session_freq_l_hz : session_freq_r_hz;
-  if (session_type == PresetType::SIN) {
-    snprintf(header, sizeof(header), "%c %s %.0fHz %.1fmA",
-             ch, session_name.c_str(), ch_freq, ch_amp);
-  } else {
-    snprintf(header, sizeof(header), "%c %s %.1fmA",
-             ch, session_name.c_str(), ch_amp);
-  }
-  oled.drawUTF8(0, 0, header);
-
+  drawSessionConfigHeader(!left);
   drawScopeChannel(left);
   snprintf(metric, sizeof(metric), "%.1fmA", left ? fb_l : fb_r);
   drawMeterAndProgress(metric);
@@ -938,7 +952,7 @@ static void drawCurrentScreen() {
       }
       items[cnt++] = "Настройки";   // предпоследний (TODO #11)
       items[cnt++] = "Спячка";   // последний
-      renderMenu(n > 0 ? "== Пресеты ==" : "== Главное меню ==", items, cnt);
+      renderMenu("Главное меню", items, cnt);
       break;
     }
     case SCR_PRESET_MENU: {

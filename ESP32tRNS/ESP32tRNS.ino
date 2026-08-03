@@ -19,6 +19,7 @@
 #include "usb_flash.h"
 #include "dac_control.h"
 #include "adc_control.h"
+#include "adc_calibration.h"
 
 #include <Wire.h>
 #include <U8g2lib.h>
@@ -57,6 +58,7 @@ enum ConfirmKind : uint8_t {
   CONFIRM_RESET_PRESETS,
   CONFIRM_RESET_CALIB,
   CONFIRM_RESET_ALL_NVS,
+  CONFIRM_REBOOT,
 };
 
 enum SessionState : uint8_t {
@@ -123,6 +125,7 @@ static ScreenType screen_stack[SCREEN_STACK_MAX] = { SCR_MAIN_MENU };
 static uint8_t stack_depth = 0;
 static uint8_t menu_selected = 0;
 static ConfirmKind confirm_kind = CONFIRM_STOP_SESSION;
+static int32_t s_enc_counter = 0;
 static int active_preset_idx = -1;
 static SessionState session_state = STATE_IDLE;
 static DashboardView dashboard_view = DASH_LEFT;
@@ -154,6 +157,8 @@ static int g_bat_pct_cached = 100;  // R.3: заряд, измеренный в�
 // Калибровки (TODO #1). Дефолты из config.h, персист в NVS (fallback-on-read, R.1).
 static float g_cal_dac_code_l  = DEF_DAC_CODE_TO_MA_L;
 static float g_cal_dac_code_r  = DEF_DAC_CODE_TO_MA_R;
+static float g_cal_ma2ma_l     = DEF_MA2MA;
+static float g_cal_ma2ma_r     = DEF_MA2MA;
 
 static char g_error_msg[40] = "";  // текст экрана ошибки старта (TODO #2/#3)
 
@@ -209,13 +214,23 @@ static void saveParamNvs(const String& preset_id, const char* tag, float v) {
 static void loadCalibration() {
   g_cal_dac_code_l  = g_pref.getFloat("cal_dac_l",  DEF_DAC_CODE_TO_MA_L);
   g_cal_dac_code_r  = g_pref.getFloat("cal_dac_r",  DEF_DAC_CODE_TO_MA_R);
+  g_cal_ma2ma_l     = g_pref.getFloat("cal_ma2ma_l", DEF_MA2MA);
+  g_cal_ma2ma_r     = g_pref.getFloat("cal_ma2ma_r", DEF_MA2MA);
+  if (g_cal_ma2ma_l < CAL_MA2MA_MIN) g_cal_ma2ma_l = CAL_MA2MA_MIN;
+  if (g_cal_ma2ma_l > CAL_MA2MA_MAX) g_cal_ma2ma_l = CAL_MA2MA_MAX;
+  if (g_cal_ma2ma_r < CAL_MA2MA_MIN) g_cal_ma2ma_r = CAL_MA2MA_MIN;
+  if (g_cal_ma2ma_r > CAL_MA2MA_MAX) g_cal_ma2ma_r = CAL_MA2MA_MAX;
   DacControl::setCodeToMa(g_cal_dac_code_l, g_cal_dac_code_r);
+  adcCalibrationApplyMa2Ma(g_cal_ma2ma_l, g_cal_ma2ma_r);
 }
 
 static void saveCalibration() {
-  g_pref.putFloat("cal_dac_l",  g_cal_dac_code_l);
-  g_pref.putFloat("cal_dac_r",  g_cal_dac_code_r);
+  g_pref.putFloat("cal_dac_l",    g_cal_dac_code_l);
+  g_pref.putFloat("cal_dac_r",    g_cal_dac_code_r);
+  g_pref.putFloat("cal_ma2ma_l",  g_cal_ma2ma_l);
+  g_pref.putFloat("cal_ma2ma_r",  g_cal_ma2ma_r);
   DacControl::setCodeToMa(g_cal_dac_code_l, g_cal_dac_code_r);
+  adcCalibrationApplyMa2Ma(g_cal_ma2ma_l, g_cal_ma2ma_r);
 }
 
 // Сброс NVS: пресеты, калибровка или всё (отдельные пункты в настройках).
@@ -230,7 +245,7 @@ static void clearPresetNvs() {
 }
 
 static void clearCalibrationNvs() {
-  static const char* keys[] = { "cal_dac_l", "cal_dac_r" };
+  static const char* keys[] = { "cal_dac_l", "cal_dac_r", "cal_ma2ma_l", "cal_ma2ma_r" };
   for (const char* k : keys) g_pref.remove(k);
   loadCalibration();
 }
@@ -567,19 +582,20 @@ static void renderMenu(const char* title, const char* choices[], uint8_t count) 
 // Шапка L/R как в v0.9: «tACS 140Hz 1.0mA 20m».
 static void drawSessionConfigHeader(bool use_right_channel) {
   oled.setFont(u8g2_font_6x12_t_cyrillic);
-  char header[44];
+  char header[48];
+  const char ch = use_right_channel ? 'R' : 'L';
   const float ch_amp  = use_right_channel ? session_amp_r_mA : session_amp_l_mA;
   const float ch_freq = use_right_channel ? session_freq_r_hz : session_freq_l_hz;
   if (session_type == PresetType::SIN) {
-    snprintf(header, sizeof(header), "%s %.0fHz %.1fmA %um",
-             session_name.c_str(), ch_freq, ch_amp, (unsigned)session_duration_min);
+    snprintf(header, sizeof(header), "%c %s %.0fHz %.1fmA %um",
+             ch, session_name.c_str(), ch_freq, ch_amp, (unsigned)session_duration_min);
   } else if (session_channels_both) {
-    snprintf(header, sizeof(header), "%s L%.1f/R%.1fмА %um",
-             session_name.c_str(), session_amp_l_mA, session_amp_r_mA,
+    snprintf(header, sizeof(header), "%c %s L%.1f/R%.1fмА %um",
+             ch, session_name.c_str(), session_amp_l_mA, session_amp_r_mA,
              (unsigned)session_duration_min);
   } else {
-    snprintf(header, sizeof(header), "%s %.1fmA %um",
-             session_name.c_str(), ch_amp, (unsigned)session_duration_min);
+    snprintf(header, sizeof(header), "%c %s %.1fmA %um",
+             ch, session_name.c_str(), ch_amp, (unsigned)session_duration_min);
   }
   oled.drawUTF8(0, 0, header);
 }
@@ -783,6 +799,9 @@ static void drawConfirm() {
   } else if (confirm_kind == CONFIRM_RESET_ALL_NVS) {
     title = "Сброс всего NVS?";
     yes_lbl = "Да, сбросить";
+  } else if (confirm_kind == CONFIRM_REBOOT) {
+    title = "Перезагрузить?";
+    yes_lbl = "Да, reboot";
   }
   oled.drawUTF8(0, 0, title);
   if (menu_selected == 0) {
@@ -974,8 +993,8 @@ static void drawCurrentScreen() {
       break;
     }
     case SCR_SETTINGS_MENU: {
-      static char slabels[8][36];
-      const char* sitems[8];
+      static char slabels[9][36];
+      const char* sitems[9];
       int scnt = 0;
       snprintf(slabels[scnt], 36, "<-Назад");
       sitems[scnt++] = slabels[0];
@@ -987,22 +1006,26 @@ static void drawCurrentScreen() {
       sitems[scnt++] = slabels[3];
       snprintf(slabels[scnt], 36, "%s", FIRMWARE_VERSION);
       sitems[scnt++] = slabels[4];
-      snprintf(slabels[scnt], 36, "Сброс пресетов");
+      snprintf(slabels[scnt], 36, "Перезагрузка");
       sitems[scnt++] = slabels[5];
-      snprintf(slabels[scnt], 36, "Сброс калибровки");
+      snprintf(slabels[scnt], 36, "Сброс пресетов");
       sitems[scnt++] = slabels[6];
-      snprintf(slabels[scnt], 36, "Сброс всего NVS");
+      snprintf(slabels[scnt], 36, "Сброс калибровки");
       sitems[scnt++] = slabels[7];
+      snprintf(slabels[scnt], 36, "Сброс всего NVS");
+      sitems[scnt++] = slabels[8];
       renderMenu("== Настройки ==", sitems, scnt);
       break;
     }
     case SCR_CALIB_MENU: {
-      char line2[32], line3[32];
-      const char* citems[3] = { line0, line2, line3 };
+      char line2[32], line3[32], line4[32], line5[32];
+      const char* citems[5] = { line0, line2, line3, line4, line5 };
       snprintf(line0, sizeof(line0), "<-Назад");
       snprintf(line2, sizeof(line2), "DAC к/мА L: %d", (int)lroundf(g_cal_dac_code_l));
       snprintf(line3, sizeof(line3), "DAC к/мА R: %d", (int)lroundf(g_cal_dac_code_r));
-      renderMenu("== Калибровка ==", citems, 3);
+      snprintf(line4, sizeof(line4), "MA2MA L: %.2f", g_cal_ma2ma_l);
+      snprintf(line5, sizeof(line5), "MA2MA R: %.2f", g_cal_ma2ma_r);
+      renderMenu("== Калибровка ==", citems, 5);
       break;
     }
     case SCR_DASHBOARD:
@@ -1065,8 +1088,8 @@ static int maxMenuIndexForScreen(ScreenType scr) {
     if (n > MENU_MAX_PRESETS) n = MENU_MAX_PRESETS;
     return n + 1; // ..., "Настройки" (n), "Спячка" (n+1)
   }
-  if (scr == SCR_SETTINGS_MENU) return 7;
-  if (scr == SCR_CALIB_MENU) return 2;
+  if (scr == SCR_SETTINGS_MENU) return 8;
+  if (scr == SCR_CALIB_MENU) return 4;
   if (scr == SCR_CONFIRM) return 1;
   if (scr == SCR_FINISH) return 0;
   if (scr == SCR_PRE_START) return 0;
@@ -1085,7 +1108,7 @@ static int maxMenuIndexForScreen(ScreenType scr) {
   return 0;
 }
 
-static void handleRotate(int8_t delta) {
+static void handleRotate(int32_t delta) {
   if (currentScreen() == SCR_DASHBOARD) {
     int v = (int)dashboard_view + delta;
     if (v < (int)DASH_LEFT) v = (int)DASH_LEFT;
@@ -1103,7 +1126,7 @@ static void handleRotate(int8_t delta) {
   }
 
   int8_t max_idx = maxMenuIndexForScreen(currentScreen());
-  int8_t next = (int8_t)menu_selected + delta;
+  int32_t next = (int32_t)menu_selected + delta;
   if (next < 0) next = 0;
   if (next > max_idx) next = max_idx;
   menu_selected = (uint8_t)next;
@@ -1127,10 +1150,12 @@ static void handleClick() {
       } else if (menu_selected == 3) {
         BootControl::rebootToUF2();
       } else if (menu_selected == 5) {
-        openNvsResetConfirm(CONFIRM_RESET_PRESETS);
+        openNvsResetConfirm(CONFIRM_REBOOT);
       } else if (menu_selected == 6) {
-        openNvsResetConfirm(CONFIRM_RESET_CALIB);
+        openNvsResetConfirm(CONFIRM_RESET_PRESETS);
       } else if (menu_selected == 7) {
+        openNvsResetConfirm(CONFIRM_RESET_CALIB);
+      } else if (menu_selected == 8) {
         openNvsResetConfirm(CONFIRM_RESET_ALL_NVS);
       }
       // 4 = версия прошивки (информация)
@@ -1140,6 +1165,8 @@ static void handleClick() {
         case 0: popScreen(); break;
         case 1: openEditor("DAC код/мА L", &g_cal_dac_code_l, CAL_DAC_CODE_MIN, CAL_DAC_CODE_MAX, CAL_DAC_CODE_STEP, true, true); break;
         case 2: openEditor("DAC код/мА R", &g_cal_dac_code_r, CAL_DAC_CODE_MIN, CAL_DAC_CODE_MAX, CAL_DAC_CODE_STEP, true, true); break;
+        case 3: openEditor("ADC mA/mA L", &g_cal_ma2ma_l, CAL_MA2MA_MIN, CAL_MA2MA_MAX, CAL_MA2MA_STEP, false, true); break;
+        case 4: openEditor("ADC mA/mA R", &g_cal_ma2ma_r, CAL_MA2MA_MIN, CAL_MA2MA_MAX, CAL_MA2MA_STEP, false, true); break;
       }
       break;
     case SCR_EDITOR:
@@ -1166,6 +1193,7 @@ static void handleClick() {
           case CONFIRM_RESET_PRESETS: clearPresetNvs(); break;
           case CONFIRM_RESET_CALIB: clearCalibrationNvs(); break;
           case CONFIRM_RESET_ALL_NVS: clearAllNvs(); break;
+          case CONFIRM_REBOOT: ESP.restart(); break;
         }
       }
       confirm_kind = CONFIRM_STOP_SESSION;
@@ -1280,14 +1308,15 @@ static void drawBootSplash() {
 static void init_enc() {
   AdcControl::init();
   enc.setEncType(EB_STEP4_LOW);
-  enc.setDebTimeout(120); // 120ms debounce — защита от дребезга механического энкодера
-  enc.setEncReverse(true);
+  enc.setDebTimeout(50);   // только кнопка; энкодер в ISR
+  enc.setEncISR(true);     // опрос только в прерывании — без гонки с loop()
   pinMode(ENC_A, INPUT_PULLUP);
   pinMode(ENC_B, INPUT_PULLUP);
   pinMode(ENC_S, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(ENC_A), enc_isr, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENC_B), enc_isr, CHANGE);
   enc.setEncReverse(ui.enc_reverse);
+  s_enc_counter = enc.counter;
 }
 
 // ============================================================
@@ -1345,15 +1374,14 @@ void loop() {
 
   bool ch = false;
 
-  if (enc.right()) {
-    handleRotate(+1);
+  const int32_t enc_now = enc.counter;
+  const int32_t enc_delta = enc_now - s_enc_counter;
+  s_enc_counter = enc_now;
+  if (enc_delta != 0) {
+    handleRotate(enc_delta);
     ch = true;
-    rgbLedWrite(NEOPIXEL_PIN, 35, 0, 20);
-  }
-  if (enc.left()) {
-    handleRotate(-1);
-    ch = true;
-    rgbLedWrite(NEOPIXEL_PIN, 0, 30, 35);
+    if (enc_delta > 0) rgbLedWrite(NEOPIXEL_PIN, 35, 0, 20);
+    else rgbLedWrite(NEOPIXEL_PIN, 0, 30, 35);
   }
   if (enc.click()) {
     handleClick();

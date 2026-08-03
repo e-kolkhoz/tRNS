@@ -30,6 +30,12 @@
 #define CAL_DAC_CODE_MAX       12000.0f
 #define CAL_DAC_CODE_STEP      50.0f
 
+// Поканальный множитель поверх adc_code2ma[] (runtime, без рестарта).
+#define DEF_MA2MA              1.0f
+#define CAL_MA2MA_MIN          0.50f
+#define CAL_MA2MA_MAX          1.50f
+#define CAL_MA2MA_STEP         0.01f
+
 // I2C OLED Display (128x64, SSD1306) ---
 #define OLED_SDA  8
 #define OLED_SCL  9

@@ -20,6 +20,7 @@
 #include "dac_control.h"
 #include "adc_control.h"
 #include "adc_calibration.h"
+#include "encoder_pcnt.h"
 
 #include <Wire.h>
 #include <U8g2lib.h>
@@ -38,7 +39,7 @@ static U8G2_SH1106_128X64_NONAME_F_HW_I2C  oled(U8G2_R0, U8X8_PIN_NONE);
 static U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE);
 #endif
 
-static EncButton enc(ENC_A, ENC_B, ENC_S);
+static Button enc_btn(ENC_S);
 
 enum ScreenType : uint8_t {
   SCR_MAIN_MENU = 0,
@@ -125,7 +126,6 @@ static ScreenType screen_stack[SCREEN_STACK_MAX] = { SCR_MAIN_MENU };
 static uint8_t stack_depth = 0;
 static uint8_t menu_selected = 0;
 static ConfirmKind confirm_kind = CONFIRM_STOP_SESSION;
-static int32_t s_enc_counter = 0;
 static int active_preset_idx = -1;
 static SessionState session_state = STATE_IDLE;
 static DashboardView dashboard_view = DASH_LEFT;
@@ -801,7 +801,7 @@ static void drawConfirm() {
     yes_lbl = "Да, сбросить";
   } else if (confirm_kind == CONFIRM_REBOOT) {
     title = "Перезагрузить?";
-    yes_lbl = "Да, reboot";
+    yes_lbl = "Да, reset";
   }
   oled.drawUTF8(0, 0, title);
   if (menu_selected == 0) {
@@ -1144,11 +1144,11 @@ static void handleClick() {
       if (menu_selected == 0) popScreen();
       else if (menu_selected == 1) {
         ui.enc_reverse = !ui.enc_reverse;
-        enc.setEncReverse(ui.enc_reverse);
+        EncoderPcnt::setReverse(ui.enc_reverse);
       } else if (menu_selected == 2) {
         pushScreen(SCR_CALIB_MENU);
       } else if (menu_selected == 3) {
-        BootControl::rebootToUF2();
+        enterUf2Mode();
       } else if (menu_selected == 5) {
         openNvsResetConfirm(CONFIRM_REBOOT);
       } else if (menu_selected == 6) {
@@ -1252,10 +1252,6 @@ static void neo_restore_idle() {
   }
 }
 
-void IRAM_ATTR enc_isr() {
-  enc.tickISR();
-}
-
 static bool oledProbe() {
   Wire.beginTransmission(DISPLAY_ADDR);
   return Wire.endTransmission() == 0;
@@ -1305,18 +1301,25 @@ static void drawBootSplash() {
   oledSendBuffer();
 }
 
+static void enterUf2Mode() {
+  static const char line1[] = "РЕЖИМ";
+  static const char line2[] = "ПРОШИВКИ";
+  if (g_oled_ok) {
+    oled.clearBuffer();
+    oled.setFont(u8g2_font_6x12_t_cyrillic);
+    oled.drawUTF8((128 - oled.getUTF8Width(line1)) / 2, 18, line1);
+    oled.drawUTF8((128 - oled.getUTF8Width(line2)) / 2, 34, line2);
+    oledSendBuffer();
+  }
+  delay(900);
+  BootControl::rebootToUF2();
+}
+
 static void init_enc() {
   AdcControl::init();
-  enc.setEncType(EB_STEP4_LOW);
-  enc.setDebTimeout(50);   // только кнопка; энкодер в ISR
-  enc.setEncISR(true);     // опрос только в прерывании — без гонки с loop()
-  pinMode(ENC_A, INPUT_PULLUP);
-  pinMode(ENC_B, INPUT_PULLUP);
   pinMode(ENC_S, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(ENC_A), enc_isr, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(ENC_B), enc_isr, CHANGE);
-  enc.setEncReverse(ui.enc_reverse);
-  s_enc_counter = enc.counter;
+  enc_btn.setDebTimeout(50);
+  EncoderPcnt::init(ENC_A, ENC_B, ui.enc_reverse);
 }
 
 // ============================================================
@@ -1370,20 +1373,18 @@ void loop() {
 
   updateSessionState();
   updateBatteryCacheIfSafe();
-  enc.tick();
+  enc_btn.tick();
 
   bool ch = false;
 
-  const int32_t enc_now = enc.counter;
-  const int32_t enc_delta = enc_now - s_enc_counter;
-  s_enc_counter = enc_now;
+  const int32_t enc_delta = EncoderPcnt::readDelta();
   if (enc_delta != 0) {
     handleRotate(enc_delta);
     ch = true;
     if (enc_delta > 0) rgbLedWrite(NEOPIXEL_PIN, 35, 0, 20);
     else rgbLedWrite(NEOPIXEL_PIN, 0, 30, 35);
   }
-  if (enc.click()) {
+  if (enc_btn.click()) {
     handleClick();
     ch = true;
     rgbLedWrite(NEOPIXEL_PIN, 40, 40, 15);

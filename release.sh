@@ -13,6 +13,16 @@ VERSION=$(cat "$SCRIPT_DIR/VERSION" | tr -d '[:space:]')
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(-[a-z]+[0-9]*)?$ ]] \
   || { echo "Bad version: $VERSION"; exit 1; }
 
+BUILD_BIN="$SCRIPT_DIR/build/firmware-${VERSION}.bin"
+BUILD_UF2="$SCRIPT_DIR/build/firmware-${VERSION}.uf2"
+if [[ -f "$BUILD_BIN" || -f "$BUILD_UF2" ]]; then
+  echo "Error: firmware v${VERSION} already exists in build/:"
+  [[ -f "$BUILD_BIN" ]] && echo "  $BUILD_BIN"
+  [[ -f "$BUILD_UF2" ]] && echo "  $BUILD_UF2"
+  echo "Bump VERSION first, or remove these files to rebuild."
+  exit 1
+fi
+
 echo "=== Build v${VERSION} ==="
 
 # ── version.h ─────────────────────────────────────────────────────────────────

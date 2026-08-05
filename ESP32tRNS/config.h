@@ -8,6 +8,10 @@
 #define ENC_S      2
 #define ENC_B      3
 
+// PCNT: glitch filter (ns, ~12 µs max на S3) + делитель raw→щелчок.
+#define ENC_PCNT_GLITCH_NS   12000u
+#define ENC_PCNT_DIV         2        // 2 raw-тика PCNT ≈ 1 физический щелчок
+
 // Neopixel (WS2812B on Lolin S3)
 #define NEOPIXEL_PIN  47  // SPICLC_P
 

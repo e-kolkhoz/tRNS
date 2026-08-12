@@ -60,7 +60,7 @@ struct PresetDefinition {
 class PresetDsl {
 public:
     // Сканирует YAML-пресеты в корне FFat, валидирует и возвращает только валидные.
-    // Одновременно пересоздает /errors.log с ошибками невалидных пресетов.
+    // Заодно пробует /ADC_cal.bin (опционально). Одновременно пересоздаёт /errors.log.
     static std::vector<PresetDefinition> scanAll();
 };
 

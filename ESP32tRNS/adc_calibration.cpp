@@ -1,8 +1,15 @@
 #include "adc_calibration.h"
+#include <FFat.h>
+#include <math.h>
+#include <stdlib.h>
 
-// LUT: ADC code 0..4095 -> mA (интерполяция+экстраполяция, calib_table.ipynb)
+// LUT: ADC code 0..4095 → mA (интерполяция+экстраполяция, calib_table.ipynb).
+// Фоллбэк в flash; при наличии валидного /ADC_cal.bin на FFat подменяется.
 
-static const float adc_code2ma[4096] = {
+static constexpr size_t ADC_LUT_N = 4096;
+static constexpr size_t ADC_LUT_BYTES = ADC_LUT_N * sizeof(float);
+
+static const float adc_code2ma_builtin[ADC_LUT_N] = {
     -3.491f, -3.488f, -3.486f, -3.483f, -3.481f, -3.478f, -3.476f, -3.473f, -3.471f, -3.468f,
     -3.466f, -3.463f, -3.461f, -3.458f, -3.456f, -3.453f, -3.451f, -3.448f, -3.446f, -3.443f,
     -3.441f, -3.439f, -3.436f, -3.434f, -3.431f, -3.429f, -3.426f, -3.424f, -3.421f, -3.419f,
@@ -415,8 +422,12 @@ static const float adc_code2ma[4096] = {
     5.567f, 5.569f, 5.571f, 5.573f, 5.575f, 5.577f,
 };
 
-static float adc_code2ma_l[4096];
-static float adc_code2ma_r[4096];
+static float adc_code2ma_l[ADC_LUT_N];
+static float adc_code2ma_r[ADC_LUT_N];
+
+static const float* s_base = adc_code2ma_builtin;
+static float* s_file_base = nullptr;
+static bool s_from_file = false;
 
 static float s_ma2ma_l = 1.0f;
 static float s_ma2ma_r = 1.0f;
@@ -424,10 +435,80 @@ static float s_ma2ma_r = 1.0f;
 void adcCalibrationApplyMa2Ma(float ma2ma_l, float ma2ma_r) {
     s_ma2ma_l = ma2ma_l;
     s_ma2ma_r = ma2ma_r;
-    for (uint16_t i = 0; i < 4096; i++) {
-        adc_code2ma_l[i] = adc_code2ma[i] * ma2ma_l;
-        adc_code2ma_r[i] = adc_code2ma[i] * ma2ma_r;
+    for (uint16_t i = 0; i < ADC_LUT_N; i++) {
+        adc_code2ma_l[i] = s_base[i] * ma2ma_l;
+        adc_code2ma_r[i] = s_base[i] * ma2ma_r;
     }
+}
+
+static bool validateLut(const float* buf, String* err) {
+    for (size_t i = 0; i < ADC_LUT_N; i++) {
+        if (!isfinite(buf[i])) {
+            if (err) *err = "ADC_cal.bin: non-finite value";
+            return false;
+        }
+        if (i > 0 && buf[i] < buf[i - 1]) {
+            if (err) *err = "ADC_cal.bin: not non-decreasing";
+            return false;
+        }
+    }
+    if (buf[0] < -10.0f || buf[0] > 1.0f || buf[ADC_LUT_N - 1] < -1.0f || buf[ADC_LUT_N - 1] > 10.0f) {
+        if (err) *err = "ADC_cal.bin: range out of bounds";
+        return false;
+    }
+    return true;
+}
+
+bool adcCalibrationLoadFile(const char* path, String* err) {
+    if (err) *err = "";
+
+    File f = FFat.open(path, "r");
+    if (!f) {
+        return false;  // нет файла — не ошибка
+    }
+
+    if ((size_t)f.size() != ADC_LUT_BYTES) {
+        if (err) {
+            *err = String("ADC_cal.bin: bad size ") + String((unsigned)f.size())
+                 + " (need " + String((unsigned)ADC_LUT_BYTES) + ")";
+        }
+        f.close();
+        return false;
+    }
+
+    float* buf = (float*)malloc(ADC_LUT_BYTES);
+    if (!buf) {
+        if (err) *err = "ADC_cal.bin: OOM";
+        f.close();
+        return false;
+    }
+
+    size_t got = f.read((uint8_t*)buf, ADC_LUT_BYTES);
+    f.close();
+    if (got != ADC_LUT_BYTES) {
+        free(buf);
+        if (err) *err = "ADC_cal.bin: short read";
+        return false;
+    }
+
+    if (!validateLut(buf, err)) {
+        free(buf);
+        return false;
+    }
+
+    if (s_file_base) {
+        free(s_file_base);
+        s_file_base = nullptr;
+    }
+    s_file_base = buf;
+    s_base = buf;
+    s_from_file = true;
+    adcCalibrationApplyMa2Ma(s_ma2ma_l, s_ma2ma_r);
+    return true;
+}
+
+bool adcCalibrationIsFromFile() {
+    return s_from_file;
 }
 
 float adcCodeToMaL(uint16_t code) {

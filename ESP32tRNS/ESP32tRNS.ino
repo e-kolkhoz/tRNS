@@ -3,7 +3,7 @@
 // ============================================================================
 //
 // Цикл загрузки:
-//   1. PresetDsl::scanAll() — FFat, список валидных YAML-пресетов (+ errors.log).
+//   1. PresetDsl::scanAll() — FFat: YAML-пресеты, опционально /ADC_cal.bin (+ errors.log).
 //   2. USBFlash::mount() — USB MSC, раздел как флешка на ПК.
 //   3. OLED — splash «== ГРУЗИМСЯ ==» сразу после I2C; меню после mount; reconnect — R.14/SRS.
 //
@@ -1018,14 +1018,16 @@ static void drawCurrentScreen() {
       break;
     }
     case SCR_CALIB_MENU: {
-      char line2[32], line3[32], line4[32], line5[32];
-      const char* citems[5] = { line0, line2, line3, line4, line5 };
+      char line2[32], line3[32], line4[32], line5[32], line6[32];
+      const char* citems[6] = { line0, line2, line3, line4, line5, line6 };
       snprintf(line0, sizeof(line0), "<-Назад");
       snprintf(line2, sizeof(line2), "DAC к/мА L: %d", (int)lroundf(g_cal_dac_code_l));
       snprintf(line3, sizeof(line3), "DAC к/мА R: %d", (int)lroundf(g_cal_dac_code_r));
       snprintf(line4, sizeof(line4), "MA2MA L: %.2f", g_cal_ma2ma_l);
       snprintf(line5, sizeof(line5), "MA2MA R: %.2f", g_cal_ma2ma_r);
-      renderMenu("== Калибровка ==", citems, 5);
+      snprintf(line6, sizeof(line6), "ADC LUT: %s",
+               adcCalibrationIsFromFile() ? "файл" : "встр.");
+      renderMenu("== Калибровка ==", citems, 6);
       break;
     }
     case SCR_DASHBOARD:
@@ -1089,7 +1091,7 @@ static int maxMenuIndexForScreen(ScreenType scr) {
     return n + 1; // ..., "Настройки" (n), "Спячка" (n+1)
   }
   if (scr == SCR_SETTINGS_MENU) return 8;
-  if (scr == SCR_CALIB_MENU) return 4;
+  if (scr == SCR_CALIB_MENU) return 5;
   if (scr == SCR_CONFIRM) return 1;
   if (scr == SCR_FINISH) return 0;
   if (scr == SCR_PRE_START) return 0;
@@ -1167,6 +1169,7 @@ static void handleClick() {
         case 2: openEditor("DAC код/мА R", &g_cal_dac_code_r, CAL_DAC_CODE_MIN, CAL_DAC_CODE_MAX, CAL_DAC_CODE_STEP, true, true); break;
         case 3: openEditor("ADC mA/mA L", &g_cal_ma2ma_l, CAL_MA2MA_MIN, CAL_MA2MA_MAX, CAL_MA2MA_STEP, false, true); break;
         case 4: openEditor("ADC mA/mA R", &g_cal_ma2ma_r, CAL_MA2MA_MIN, CAL_MA2MA_MAX, CAL_MA2MA_STEP, false, true); break;
+        // 5 = ADC LUT источник (файл / встр.), некликабельно
       }
       break;
     case SCR_EDITOR:

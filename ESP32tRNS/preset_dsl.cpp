@@ -1,6 +1,7 @@
 #include "preset_dsl.h"
 #include "wav_reader.h"
 #include "dac_control.h"
+#include "adc_calibration.h"
 
 #include <FFat.h>
 #include <math.h>
@@ -379,8 +380,24 @@ std::vector<PresetDefinition> PresetDsl::scanAll() {
         return out;
     }
 
+    // ADC LUT с флешки пресетов (опционально). Нет файла — ок, остаётся встроенная таблица.
+    {
+        String adc_err;
+        if (adcCalibrationLoadFile("/ADC_cal.bin", &adc_err)) {
+            errors.push_back("ADC_cal.bin: loaded");
+        } else if (adc_err.length() > 0) {
+            errors.push_back(adc_err);
+        }
+    }
+
     File root = FFat.open("/");
     if (!root || !root.isDirectory()) {
+        File elog = FFat.open("/errors.log", "w");
+        if (elog) {
+            for (size_t i = 0; i < errors.size(); i++) elog.println(errors[i]);
+            elog.println("FFat: root open failed");
+            elog.close();
+        }
         FFat.end();
         return out;
     }

@@ -404,6 +404,17 @@ static void beginFadeOut() {
   session_state_start_ms = millis();
 }
 
+static uint8_t scopePeriodCount(ScopeSyncMode mode) {
+  switch (mode) {
+    case ScopeSyncMode::ONE_PERIOD: return 1;
+    case ScopeSyncMode::TWO_PERIODS: return 2;
+    case ScopeSyncMode::NO_SYNC:
+    case ScopeSyncMode::NONE:
+    default:
+      return 0;
+  }
+}
+
 static void startSession(const PresetDefinition& preset, const PresetRuntime& rt) {
   session_just_finished = false;
   dashboard_view = DASH_LEFT;
@@ -464,12 +475,12 @@ static void startSession(const PresetDefinition& preset, const PresetRuntime& rt
     session_scope_period   = (uint32_t)prog.period_samples_l;
     session_scope_period_r = (prog.period_samples_r >= 2)
         ? (uint32_t)prog.period_samples_r : session_scope_period;
-    session_scope_nper = 2;
+    session_scope_nper = scopePeriodCount(preset.scope_sync);
   } else if (preset.type == PresetType::WAV && preset.sample_rate_hz > 0 && !preset.wav_left_samples.empty()) {
     session_scope_period = (uint32_t)(
         ((uint64_t)preset.wav_left_samples.size() * ADC_OUT_RATE_HZ) / (uint32_t)preset.sample_rate_hz);
     session_scope_period_r = session_scope_period;
-    session_scope_nper   = 1;
+    session_scope_nper = scopePeriodCount(preset.scope_sync);
   } else {
     session_scope_period = 0;
     session_scope_period_r = 0;

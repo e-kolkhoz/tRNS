@@ -7,5 +7,5 @@
 build/
 *.elf
 *.map
-
+ADC_cal.bin
 # UF2 tools (uf2conv.py — в репо, не игнорируем)

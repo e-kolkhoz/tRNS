@@ -1,0 +1,41 @@
+# tES ~77.7 Hz, один период прямоугольника (duty из tes1.5), stereo WAV
+# amplitude_mA: UI на канал; ×1.5 (crest) от номинала 0.5/1/1.5 mA
+dsl_version: 1
+name: "TES77hz"
+type: "WAV"
+
+channels:
+  mode: "left"
+
+feedback:
+  amp_estimation_base: "AUTO_RMS"
+
+scope:
+  sync_mode: "two_periods"
+
+wave_file: "tes-77hz.wav"
+
+params:
+  amplitude_mA:
+    min: 0.75
+    max: 2.25
+    step: 0.05
+    default: 1.5
+
+  fade_in_sec:
+    min: 0
+    max: 60
+    step: 1
+    default: 10
+
+  fade_out_sec:
+    min: 0
+    max: 60
+    step: 1
+    default: 10
+
+  duration_min:
+    min: 2
+    max: 60
+    step: 1
+    default: 20

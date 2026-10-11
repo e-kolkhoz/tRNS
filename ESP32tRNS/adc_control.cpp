@@ -196,6 +196,25 @@ bool AdcControl::s_pin_l_ok   = false;
 bool AdcControl::s_pin_r_ok   = false;
 bool AdcControl::s_configured = false;
 
+bool AdcControl::meanCodes(uint16_t* code_l, uint16_t* code_r, uint32_t window_samples) {
+    if (!s_running || !code_l || !code_r || window_samples < 8) return false;
+    uint32_t count = s_wr_idx;
+    if (count > ADC_RING_SIZE) count = ADC_RING_SIZE;
+    if (count < window_samples) return false;
+
+    const uint32_t start = (s_wr_idx + ADC_RING_SIZE - window_samples) % ADC_RING_SIZE;
+    uint64_t sum_l = 0;
+    uint64_t sum_r = 0;
+    for (uint32_t i = 0; i < window_samples; i++) {
+        const uint32_t idx = (start + i) % ADC_RING_SIZE;
+        sum_l += s_code_l[idx];
+        sum_r += s_code_r[idx];
+    }
+    *code_l = (uint16_t)((sum_l + window_samples / 2) / window_samples);
+    *code_r = (uint16_t)((sum_r + window_samples / 2) / window_samples);
+    return true;
+}
+
 void AdcControl::init() {
     if (s_adc) return;
 

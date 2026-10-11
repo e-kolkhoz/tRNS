@@ -40,6 +40,16 @@ bool USBFlash::mount() {
     return true;
 }
 
+void USBFlash::end() {
+    if (!_mounted) return;
+    _msc.end();
+    if (_wl != WL_INVALID_HANDLE) {
+        wl_unmount(_wl);
+        _wl = WL_INVALID_HANDLE;
+    }
+    _mounted = false;
+}
+
 bool USBFlash::isMounted() {
     return _mounted;
 }

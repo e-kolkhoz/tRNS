@@ -21,6 +21,10 @@ public:
     static AdcChannelStats statsLeft();
     static AdcChannelStats statsRight();
 
+    // Средний код ADC по последним window_samples отсчётам кольца (оба канала).
+    // false, если захват ещё не накопил окно.
+    static bool meanCodes(uint16_t* code_l, uint16_t* code_r, uint32_t window_samples);
+
     // Осциллограф: трасса в mA, out[0..width-1].
     static bool scopeTrace(bool left, float* out, uint8_t width,
                            uint32_t period_samples, uint8_t n_periods);

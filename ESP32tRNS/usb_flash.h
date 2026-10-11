@@ -7,6 +7,7 @@
 class USBFlash {
 public:
     static bool mount();
+    static void end();   // отпустить раздел, чтобы его мог смонтировать FFat
     static bool isMounted();
 
 private:

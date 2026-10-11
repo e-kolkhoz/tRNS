@@ -20,6 +20,7 @@
 #include "dac_control.h"
 #include "adc_control.h"
 #include "adc_calibration.h"
+#include "adc_cal_run.h"
 #include "encoder_pcnt.h"
 
 #include <Wire.h>
@@ -46,6 +47,7 @@ enum ScreenType : uint8_t {
   SCR_PRESET_MENU,   // единое меню пресета; наполнение ветвится по PresetType
   SCR_SETTINGS_MENU,
   SCR_CALIB_MENU,    // редактор калибровок (TODO #1)
+  SCR_ADC_CAL,       // автокалибровка ADC → /ADC_cal.bin
   SCR_EDITOR,
   SCR_DASHBOARD,
   SCR_CONFIRM,
@@ -917,6 +919,37 @@ static void drawError() {
   oledSendBuffer();
 }
 
+static void drawAdcCal() {
+  const AdcCalView& v = adcAutoCalView();
+  oled.clearBuffer();
+  oled.setFont(u8g2_font_6x12_t_cyrillic);
+  oled.drawUTF8(0, 0, "== CalibADC ==");
+
+  if (v.ui == AdcCalUi::ASK) {
+    oled.drawUTF8(0, 14, "нагрузка в L и R");
+    oled.drawUTF8(0, 28, menu_selected == 0 ? "> Старт" : "  Старт");
+    oled.drawUTF8(0, 40, menu_selected == 1 ? "> Отмена" : "  Отмена");
+    oledSendBuffer();
+    return;
+  }
+
+  char line[32];
+  snprintf(line, sizeof(line), "%d/%d", v.step, v.nsteps);
+  oled.drawStr(0, 14, line);
+  snprintf(line, sizeof(line), "%+.2f mA", v.ma);
+  oled.drawStr(48, 14, line);
+  if (v.code_l < 0) snprintf(line, sizeof(line), "L ----");
+  else snprintf(line, sizeof(line), "L %4d", v.code_l);
+  oled.drawStr(0, 28, line);
+  if (v.code_r < 0) snprintf(line, sizeof(line), "R ----");
+  else snprintf(line, sizeof(line), "R %4d", v.code_r);
+  oled.drawStr(64, 28, line);
+  oled.drawUTF8(0, 42, v.msg);
+  if (v.ui == AdcCalUi::FAIL) oled.drawUTF8(0, 54, "> назад");
+  else oled.drawUTF8(0, 54, "нажатие — стоп");
+  oledSendBuffer();
+}
+
 // Заполняет декларативный список пунктов пресет-меню (R.10).
 // items/labels — буферы длиной PRESET_MENU_MAX_ITEMS; возвращает число пунктов.
 static int buildPresetMenu(const PresetDefinition& p, PresetRuntime& rt,
@@ -1004,8 +1037,8 @@ static void drawCurrentScreen() {
       break;
     }
     case SCR_SETTINGS_MENU: {
-      static char slabels[9][36];
-      const char* sitems[9];
+      static char slabels[10][36];
+      const char* sitems[10];
       int scnt = 0;
       snprintf(slabels[scnt], 36, "<-Назад");
       sitems[scnt++] = slabels[0];
@@ -1025,6 +1058,8 @@ static void drawCurrentScreen() {
       sitems[scnt++] = slabels[7];
       snprintf(slabels[scnt], 36, "Сброс всего NVS");
       sitems[scnt++] = slabels[8];
+      snprintf(slabels[scnt], 36, "!CalibADC");
+      sitems[scnt++] = slabels[9];
       renderMenu("== Настройки ==", sitems, scnt);
       break;
     }
@@ -1058,6 +1093,9 @@ static void drawCurrentScreen() {
       break;
     case SCR_ERROR:
       drawError();
+      break;
+    case SCR_ADC_CAL:
+      drawAdcCal();
       break;
   }
 }
@@ -1101,8 +1139,13 @@ static int maxMenuIndexForScreen(ScreenType scr) {
     if (n > MENU_MAX_PRESETS) n = MENU_MAX_PRESETS;
     return n + 1; // ..., "Настройки" (n), "Спячка" (n+1)
   }
-  if (scr == SCR_SETTINGS_MENU) return 8;
+  if (scr == SCR_SETTINGS_MENU) return 9;
   if (scr == SCR_CALIB_MENU) return 5;
+  if (scr == SCR_ADC_CAL) {
+    const AdcCalView& v = adcAutoCalView();
+    if (v.ui == AdcCalUi::ASK) return 1;
+    return 0;
+  }
   if (scr == SCR_CONFIRM) return 1;
   if (scr == SCR_FINISH) return 0;
   if (scr == SCR_PRE_START) return 0;
@@ -1170,6 +1213,9 @@ static void handleClick() {
         openNvsResetConfirm(CONFIRM_RESET_CALIB);
       } else if (menu_selected == 8) {
         openNvsResetConfirm(CONFIRM_RESET_ALL_NVS);
+      } else if (menu_selected == 9) {
+        adcAutoCalEnter();
+        pushScreen(SCR_ADC_CAL);
       }
       // 4 = версия прошивки (информация)
       break;
@@ -1224,6 +1270,23 @@ static void handleClick() {
     case SCR_ERROR:
       popScreen();
       break;
+    case SCR_ADC_CAL: {
+      const AdcCalView& v = adcAutoCalView();
+      if (v.ui == AdcCalUi::ASK) {
+        if (menu_selected == 0) adcAutoCalStart();
+        else {
+          adcAutoCalAbort();
+          popScreen();
+        }
+      } else if (v.ui == AdcCalUi::FAIL) {
+        adcAutoCalAbort();
+        popScreen();
+      } else {
+        adcAutoCalAbort();
+        popScreen();
+      }
+      break;
+    }
   }
 }
 
@@ -1387,6 +1450,7 @@ void loop() {
 
   updateSessionState();
   updateBatteryCacheIfSafe();
+  if (currentScreen() == SCR_ADC_CAL) adcAutoCalTick();
   enc_btn.tick();
 
   bool ch = false;
